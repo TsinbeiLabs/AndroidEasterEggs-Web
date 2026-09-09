@@ -160,7 +160,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '10',
     codename: 'Quince Tart',
     title: 'Icon Quiz',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/q'),
   },
   {
     id: 'r',
@@ -168,7 +169,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '11',
     codename: 'Red Velvet Cake',
     title: 'Cat Controls',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/r'),
   },
   {
     id: 's',
@@ -176,7 +178,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '12 – 12L',
     codename: 'Snow Cone',
     title: 'Paint Chips',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/s'),
   },
   {
     id: 'tiramisu',
@@ -184,7 +187,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '13',
     codename: 'Tiramisu',
     title: 'Paint Chips',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/tiramisu'),
   },
   {
     id: 'upside-down-cake',
