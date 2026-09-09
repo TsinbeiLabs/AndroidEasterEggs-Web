@@ -1,4 +1,9 @@
 import type { EggMeta } from './types';
+import { createBaseEgg } from '../eggs/base';
+
+const baseEgg = (version: string, nickname: string, accent: string) => async () => ({
+  default: createBaseEgg({ version, nickname, accent }),
+});
 
 /**
  * Every egg in ascending Android API order.
@@ -13,7 +18,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '1.0',
     codename: 'Base',
     title: 'PlatLogo',
-    status: 'planned',
+    status: 'ready',
+    load: baseEgg('1.0', 'Base', '#9E9E9E'),
   },
   {
     id: 'petit-four',
@@ -21,7 +27,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '1.1',
     codename: 'Petit Four',
     title: 'PlatLogo',
-    status: 'planned',
+    status: 'ready',
+    load: baseEgg('1.1', 'Petit Four', '#B39DDB'),
   },
   {
     id: 'cupcake',
@@ -29,7 +36,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '1.5',
     codename: 'Cupcake',
     title: 'PlatLogo',
-    status: 'planned',
+    status: 'ready',
+    load: baseEgg('1.5', 'Cupcake', '#F48FB1'),
   },
   {
     id: 'donut',
@@ -37,7 +45,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '1.6',
     codename: 'Donut',
     title: 'PlatLogo',
-    status: 'planned',
+    status: 'ready',
+    load: baseEgg('1.6', 'Donut', '#FFCC80'),
   },
   {
     id: 'eclair',
@@ -45,7 +54,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '2.0 – 2.1',
     codename: 'Eclair',
     title: 'PlatLogo',
-    status: 'planned',
+    status: 'ready',
+    load: baseEgg('2.0', 'Eclair', '#90CAF9'),
   },
   {
     id: 'froyo',
@@ -53,7 +63,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '2.2',
     codename: 'Froyo',
     title: 'PlatLogo',
-    status: 'planned',
+    status: 'ready',
+    load: baseEgg('2.2', 'Froyo', '#A5D6A7'),
   },
   {
     id: 'gingerbread',
@@ -196,7 +207,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '14',
     codename: 'Upside Down Cake',
     title: 'Landroid',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/upsidedowncake'),
   },
   {
     id: 'vanilla-ice-cream',
@@ -204,7 +216,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '15',
     codename: 'Vanilla Ice Cream',
     title: 'Landroid',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/vanillaicecream'),
   },
   {
     id: 'baklava',
@@ -212,15 +225,35 @@ export const EGGS: readonly EggMeta[] = [
     version: '16',
     codename: 'Baklava',
     title: 'Landroid',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/baklava'),
   },
   {
     id: 'cinnamon-bun',
     api: 37,
     version: '17',
     codename: 'Cinnamon Bun',
-    title: 'PlatLogo',
-    status: 'planned',
+    title: 'Heptadecagram + Landroid',
+    status: 'ready',
+    load: () => import('../eggs/cinnamonbun'),
+  },
+  {
+    id: 'android-next',
+    api: 10000,
+    version: 'Next',
+    codename: 'Android Next',
+    title: 'Release Timeline',
+    status: 'ready',
+    load: () => import('../eggs/androidnext'),
+  },
+  {
+    id: 'rocket-launcher',
+    api: 10001,
+    version: '2.x',
+    codename: 'RocketLauncher',
+    title: 'launcher2 Home',
+    status: 'ready',
+    load: () => import('../eggs/rocketlauncher'),
   },
 ];
 

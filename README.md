@@ -41,8 +41,45 @@ docs/research/           # 逐模块的上游实现对照记录（配色、时�
 
 ## 移植进度
 
-见站点左侧列表（`src/core/registry.ts` 中的 `status` 字段）：
-`ready` 可玩 · `wip` 施工中 · `planned` 待移植。
+全部版本已移植完成（`src/core/registry.ts`，按 API 升序）：
+
+| Android | 代号 | 彩蛋 |
+|---|---|---|
+| 1.0 – 2.2 | Base / Petit Four / Cupcake / Donut / Eclair / Froyo | PlatLogo |
+| 2.3 | Gingerbread | Zombie Art |
+| 3.0 – 3.2 | Honeycomb | REZZZZZZZ |
+| 4.0 | Ice Cream Sandwich | Nyandroid |
+| 4.1 – 4.3 | Jelly Bean | BeanBag |
+| 4.4 | KitKat | Dessert Case |
+| L Preview | L Preview | Webdriver Torso |
+| 5.0 – 5.1 | Lollipop | LLand |
+| 6.0 | Marshmallow | MLand |
+| 7.0 – 7.1 | Nougat | Neko |
+| 8.0 – 8.1 | Oreo | Ocquarium |
+| 9.0 | Pie | PAINT.APK |
+| 10 | Quince Tart | Icon Quiz |
+| 11 | Red Velvet Cake | Cat Controls |
+| 12 – 12L | Snow Cone | Paint Chips |
+| 13 | Tiramisu | Paint Chips + emoji 气泡 |
+| 14 | Upside Down Cake | Landroid |
+| 15 | Vanilla Ice Cream | Landroid + Autopilot |
+| 16 | Baklava | Landroid + AUTO |
+| 17 | Cinnamon Bun | 十七角星一笔画 + Landroid |
+| — | Android Next | 发布时间表 |
+| — | RocketLauncher | launcher2 桌面 |
+
+## 与上游的已知偏差
+
+- 不使用任何位图：AOSP 的 raster 素材（Gingerbread 僵尸插画、Honeycomb 蜜蜂、KitKat 甜点 sprite 等）
+  改为矢量/程序化重绘，保留原尺寸、配色与时序。
+- KitKat 的 `dessert_kitkat`（Nestlé KitKat 包装，上游标注 "used with permission"）替换为通用的四指威化剪影。
+- 动态取色（`system_accent*`）在 Web 上不存在，Paint Chips 用随机种子色相生成的色调梯度替代。
+- Icon Quiz 的题库改为自绘的 16×16 图标，仍走上游 `alpha * 1.25` 后取整的量化流程。
+- Neko 的 `JobScheduler` 改为 `localStorage` 里的到期时间戳 + 打开页面时结算；额外提供“喂猫”按钮立即结算一次。
+- 多点触控（MLand 的分列操作、Pie 的双指缩放）在单指针宿主下降级：MLand 单指控制一列、Pie 用滚轮缩放 logo。
+- HDR（Baklava/Cinnamon Bun 的超亮星空与 bloom）在 SDR 面板上按 alpha 近似。
+- 随机数：Neko 的猫严格复刻 `java.util.Random`（seed 与 Android 互通），Landroid 的宇宙生成用 mulberry32
+  替代 `kotlin.random.Random`，seed 不与 Android 互通。
 
 ## 致谢与许可
 
