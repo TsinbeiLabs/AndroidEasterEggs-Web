@@ -133,7 +133,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '7.0 – 7.1',
     codename: 'Nougat',
     title: 'Neko',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/nougat'),
   },
   {
     id: 'oreo',
@@ -141,7 +142,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '8.0 – 8.1',
     codename: 'Oreo',
     title: 'Ocquarium',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/oreo'),
   },
   {
     id: 'pie',
@@ -149,7 +151,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '9.0',
     codename: 'Pie',
     title: 'PAINT.APK',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/pie'),
   },
   {
     id: 'q',
