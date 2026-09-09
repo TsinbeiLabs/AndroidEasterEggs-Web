@@ -106,7 +106,8 @@ export const EGGS: readonly EggMeta[] = [
     version: 'L Preview',
     codename: 'L Preview',
     title: 'Webdriver Torso',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/webdrivertorso'),
   },
   {
     id: 'lollipop',
@@ -114,7 +115,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '5.0 – 5.1',
     codename: 'Lollipop',
     title: 'LLand',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/lollipop'),
   },
   {
     id: 'marshmallow',
@@ -122,7 +124,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '6.0',
     codename: 'Marshmallow',
     title: 'MLand',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/marshmallow'),
   },
   {
     id: 'nougat',
