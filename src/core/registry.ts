@@ -88,7 +88,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '4.1 – 4.3',
     codename: 'Jelly Bean',
     title: 'BeanBag',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/jellybean'),
   },
   {
     id: 'kitkat',
@@ -96,7 +97,8 @@ export const EGGS: readonly EggMeta[] = [
     version: '4.4',
     codename: 'KitKat',
     title: 'Dessert Case',
-    status: 'planned',
+    status: 'ready',
+    load: () => import('../eggs/kitkat'),
   },
   {
     id: 'webdriver-torso',
