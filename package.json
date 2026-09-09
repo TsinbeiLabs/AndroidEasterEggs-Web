@@ -1,0 +1,17 @@
+{
+  "name": "android-easter-eggs-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Android Easter Eggs ported to the web — TypeScript + Canvas 2D, no framework",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
+  }
+}

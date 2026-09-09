@@ -1,0 +1,221 @@
+import type { EggMeta } from './types';
+
+/**
+ * Every egg in ascending Android API order.
+ *
+ * `load` is only present once an egg is actually implemented; the shell renders
+ * the rest as disabled "planned" entries so the roadmap stays visible.
+ */
+export const EGGS: readonly EggMeta[] = [
+  {
+    id: 'base',
+    api: 1,
+    version: '1.0',
+    codename: 'Base',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+  {
+    id: 'petit-four',
+    api: 2,
+    version: '1.1',
+    codename: 'Petit Four',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+  {
+    id: 'cupcake',
+    api: 3,
+    version: '1.5',
+    codename: 'Cupcake',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+  {
+    id: 'donut',
+    api: 4,
+    version: '1.6',
+    codename: 'Donut',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+  {
+    id: 'eclair',
+    api: 5,
+    version: '2.0 – 2.1',
+    codename: 'Eclair',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+  {
+    id: 'froyo',
+    api: 8,
+    version: '2.2',
+    codename: 'Froyo',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+  {
+    id: 'gingerbread',
+    api: 9,
+    version: '2.3',
+    codename: 'Gingerbread',
+    title: 'Zombie Art',
+    status: 'ready',
+    load: () => import('../eggs/gingerbread'),
+  },
+  {
+    id: 'honeycomb',
+    api: 11,
+    version: '3.0 – 3.2',
+    codename: 'Honeycomb',
+    title: 'REZZZZZZZ',
+    status: 'ready',
+    load: () => import('../eggs/honeycomb'),
+  },
+  {
+    id: 'ice-cream-sandwich',
+    api: 14,
+    version: '4.0',
+    codename: 'Ice Cream Sandwich',
+    title: 'Nyandroid',
+    status: 'ready',
+    load: () => import('../eggs/icecreamsandwich'),
+  },
+  {
+    id: 'jelly-bean',
+    api: 16,
+    version: '4.1 – 4.3',
+    codename: 'Jelly Bean',
+    title: 'BeanBag',
+    status: 'planned',
+  },
+  {
+    id: 'kitkat',
+    api: 19,
+    version: '4.4',
+    codename: 'KitKat',
+    title: 'Dessert Case',
+    status: 'planned',
+  },
+  {
+    id: 'webdriver-torso',
+    api: 20,
+    version: 'L Preview',
+    codename: 'L Preview',
+    title: 'Webdriver Torso',
+    status: 'planned',
+  },
+  {
+    id: 'lollipop',
+    api: 21,
+    version: '5.0 – 5.1',
+    codename: 'Lollipop',
+    title: 'LLand',
+    status: 'planned',
+  },
+  {
+    id: 'marshmallow',
+    api: 23,
+    version: '6.0',
+    codename: 'Marshmallow',
+    title: 'MLand',
+    status: 'planned',
+  },
+  {
+    id: 'nougat',
+    api: 24,
+    version: '7.0 – 7.1',
+    codename: 'Nougat',
+    title: 'Neko',
+    status: 'planned',
+  },
+  {
+    id: 'oreo',
+    api: 26,
+    version: '8.0 – 8.1',
+    codename: 'Oreo',
+    title: 'Ocquarium',
+    status: 'planned',
+  },
+  {
+    id: 'pie',
+    api: 28,
+    version: '9.0',
+    codename: 'Pie',
+    title: 'PAINT.APK',
+    status: 'planned',
+  },
+  {
+    id: 'q',
+    api: 29,
+    version: '10',
+    codename: 'Quince Tart',
+    title: 'Icon Quiz',
+    status: 'planned',
+  },
+  {
+    id: 'r',
+    api: 30,
+    version: '11',
+    codename: 'Red Velvet Cake',
+    title: 'Cat Controls',
+    status: 'planned',
+  },
+  {
+    id: 's',
+    api: 31,
+    version: '12 – 12L',
+    codename: 'Snow Cone',
+    title: 'Paint Chips',
+    status: 'planned',
+  },
+  {
+    id: 'tiramisu',
+    api: 33,
+    version: '13',
+    codename: 'Tiramisu',
+    title: 'Paint Chips',
+    status: 'planned',
+  },
+  {
+    id: 'upside-down-cake',
+    api: 34,
+    version: '14',
+    codename: 'Upside Down Cake',
+    title: 'Landroid',
+    status: 'planned',
+  },
+  {
+    id: 'vanilla-ice-cream',
+    api: 35,
+    version: '15',
+    codename: 'Vanilla Ice Cream',
+    title: 'Landroid',
+    status: 'planned',
+  },
+  {
+    id: 'baklava',
+    api: 36,
+    version: '16',
+    codename: 'Baklava',
+    title: 'Landroid',
+    status: 'planned',
+  },
+  {
+    id: 'cinnamon-bun',
+    api: 37,
+    version: '17',
+    codename: 'Cinnamon Bun',
+    title: 'PlatLogo',
+    status: 'planned',
+  },
+];
+
+export function findEgg(id: string): EggMeta | undefined {
+  return EGGS.find((egg) => egg.id === id);
+}
+
+export function isReady(meta: EggMeta): boolean {
+  return meta.status === 'ready' && meta.load !== undefined;
+}

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="Android 彩蛋 Web 移植版：从 2.3 Gingerbread 到 17 Cinnamon Bun，TypeScript + Canvas 2D 实现"
+    />
+    <title>Android Easter Eggs · Web</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header class="sidebar-head">
+          <h1>Android Easter Eggs</h1>
+          <p class="subtitle">Web port · Canvas 2D</p>
+        </header>
+        <nav id="egg-list" aria-label="彩蛋列表"></nav>
+        <footer class="sidebar-foot">
+          <a href="https://github.com/TsinbeiLabs/AndroidEasterEggs-Web" target="_blank" rel="noreferrer">GitHub</a>
+          <span class="sep">·</span>
+          <a href="#/about">关于与致谢</a>
+        </footer>
+      </aside>
+      <main id="stage-wrap">
+        <div id="stage-head">
+          <button id="back" type="button" aria-label="返回列表">←</button>
+          <div id="stage-title">
+            <span id="stage-name">选择一个彩蛋</span>
+            <span id="stage-meta"></span>
+          </div>
+          <div id="stage-actions"></div>
+        </div>
+        <div id="stage"></div>
+        <div id="toast-root"></div>
+      </main>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
