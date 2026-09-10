@@ -42,6 +42,7 @@ class SpotFilter {
   private readonly posDecay: number;
   private readonly pressureDecay: number;
   private readonly plot: (spot: Spot) => void;
+  private precise = false;
 
   constructor(
     size: number,
@@ -55,7 +56,8 @@ class SpotFilter {
     this.plot = plot;
   }
 
-  add(spot: Spot): void {
+  add(spot: Spot, precise = false): void {
+    this.precise = precise;
     this.buffer.unshift(spot);
     if (this.buffer.length > this.size) this.buffer.pop();
     this.plot(this.filtered());
@@ -89,6 +91,9 @@ class SpotFilter {
       pw += wp;
       wpos *= this.posDecay;
       wp *= this.pressureDecay;
+      // `PRECISE_STYLUS_INPUT && tool == TOOL_TYPE_STYLUS`: just take the
+      // newest one, no need to average.
+      if (this.precise) break;
     }
     return { x: x / sw, y: y / sw, pressure: pressure / pw };
   }
@@ -144,6 +149,10 @@ export class PaintApp {
   private lastR = -1;
   private lastZen = 0;
   private drawing = false;
+  /** The pointer that owns the current stroke (upstream plots pointer 0 only). */
+  private drawingId: number | null = null;
+  /** The pointer that owns the current colour-sampling gesture. */
+  private sampleId: number | null = null;
 
   private readonly filter: SpotFilter;
   private readonly listeners: Array<() => void> = [];
@@ -170,10 +179,16 @@ export class PaintApp {
   private attach(): void {
     const canvas = this.context.canvas;
 
+    // Upstream fingers report full-scale pressure (r = brushWidth); only a
+    // stylus provides a real 0..1 ramp — and a stylus is also the
+    // `PRECISE_STYLUS_INPUT` tool that bypasses the smoothing filter.
+    const pressureOf = (event: PointerEvent): number =>
+      event.pointerType === 'pen' && event.pressure > 0 ? event.pressure : 1;
+
     const toArt = (event: PointerEvent): Spot => ({
       x: event.offsetX * this.ascale,
       y: event.offsetY * this.ascale,
-      pressure: event.pressure > 0 ? event.pressure : 1,
+      pressure: pressureOf(event),
     });
 
     const inToolbar = (y: number) => y < BAR_HEIGHT + (this.openRow === null ? 0 : ROW_HEIGHT);
@@ -184,48 +199,60 @@ export class PaintApp {
         return;
       }
       if (this.sampling) {
+        if (this.sampleId === null) this.sampleId = event.pointerId;
+        if (event.pointerId !== this.sampleId) return;
         this.sampleColor = this.sampleAtPixel(event.offsetX, event.offsetY);
         this.sampleAt = [event.offsetX, event.offsetY];
         return;
       }
+      // `Painting` only ever reads pointer 0 — a second finger is ignored.
+      if (this.drawing) return;
       canvas.setPointerCapture?.(event.pointerId);
       this.drawing = true;
+      this.drawingId = event.pointerId;
       this.lastR = -1;
       this.filter.reset();
-      this.filter.add(toArt(event));
+      this.filter.add(toArt(event), event.pointerType === 'pen');
     };
 
     const onMove = (event: PointerEvent) => {
       if (this.sampling) {
+        if (event.pointerId !== this.sampleId) return;
         this.sampleColor = this.sampleAtPixel(event.offsetX, event.offsetY);
         this.sampleAt = [event.offsetX, event.offsetY];
         return;
       }
-      if (!this.drawing) return;
+      if (!this.drawing || event.pointerId !== this.drawingId) return;
       const events = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
       if (events.length > 0) {
         for (const coalesced of events) {
-          this.filter.add({
-            x: coalesced.offsetX * this.ascale,
-            y: coalesced.offsetY * this.ascale,
-            pressure: coalesced.pressure > 0 ? coalesced.pressure : 1,
-          });
+          this.filter.add(
+            {
+              x: coalesced.offsetX * this.ascale,
+              y: coalesced.offsetY * this.ascale,
+              pressure: pressureOf(coalesced),
+            },
+            coalesced.pointerType === 'pen',
+          );
         }
         return;
       }
-      this.filter.add(toArt(event));
+      this.filter.add(toArt(event), event.pointerType === 'pen');
     };
 
     const onUp = (event: PointerEvent) => {
       if (this.sampling) {
+        if (event.pointerId !== this.sampleId) return;
         this.paintColor = this.sampleColor;
         this.sampling = false;
         this.sampleAt = null;
+        this.sampleId = null;
         return;
       }
-      if (!this.drawing) return;
+      if (!this.drawing || event.pointerId !== this.drawingId) return;
       this.drawing = false;
-      this.filter.add(toArt(event));
+      this.drawingId = null;
+      this.filter.add(toArt(event), event.pointerType === 'pen');
       this.filter.finish();
     };
 
@@ -270,10 +297,14 @@ export class PaintApp {
           if (button.id.startsWith('brush:')) {
             const i = Number(button.id.slice(6));
             this.brushWidth = BRUSH_WIDTHS[i] * this.ascale;
+            // `hideToolbar(brushes)` after picking a width.
+            this.openRow = null;
           } else if (button.id.startsWith('color:')) {
             const i = Number(button.id.slice(6));
             const color = this.colors[i];
             if (color !== undefined) this.paintColor = color;
+            // `hideToolbar(colors)` after picking a colour.
+            this.openRow = null;
           } else if (button.id === 'reroll') {
             this.colors = makePalette(this.context.random);
           }
@@ -353,6 +384,11 @@ export class PaintApp {
     this.actx.fillRect(0, 0, this.artwork.width, this.artwork.height);
   }
 
+  /**
+   * `Painting.invertContents()` — INVERT_CF over the bitmap only. The paper
+   * and paint colours are NOT flipped upstream: clear() restores the original
+   * paper and the zen fade keeps heading toward it.
+   */
   invertContents(): void {
     const { width, height } = this.artwork;
     const image = this.actx.getImageData(0, 0, width, height);
@@ -363,8 +399,6 @@ export class PaintApp {
       data[i + 2] = 255 - data[i + 2];
     }
     this.actx.putImageData(image, 0, 0);
-    this.paper = this.paper === '#FFFFFF' ? '#000000' : '#FFFFFF';
-    this.paintColor = this.paintColor === '#000000' ? '#FFFFFF' : '#000000';
   }
 
   update(now: number): void {
@@ -377,14 +411,20 @@ export class PaintApp {
     if (now - this.lastZen < ZEN_RATE) return;
     this.lastZen = now;
 
-    // c += ZEN_FADE toward white paper, c -= ZEN_FADE toward black paper.
-    const sign = this.paper === '#FFFFFF' ? 1 : -1;
-    const alpha = ZEN_FADE / 255;
-    this.actx.save();
-    this.actx.globalAlpha = alpha;
-    this.actx.fillStyle = sign > 0 ? '#FFFFFF' : '#000000';
-    this.actx.fillRect(0, 0, this.artwork.width, this.artwork.height);
-    this.actx.restore();
+    // FADE_TO_WHITE_CF / FADE_TO_BLACK_CF add a CONSTANT ZEN_FADE offset to
+    // every channel (clamped), not a proportional blend — otherwise the
+    // artwork would fade asymptotically and never vanish in FADE_MINS.
+    // Upstream picks the direction from the paper's blue channel > 0x80.
+    const delta = this.paper === '#FFFFFF' ? ZEN_FADE : -ZEN_FADE;
+    const { width, height } = this.artwork;
+    const image = this.actx.getImageData(0, 0, width, height);
+    const data = image.data;
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] += delta;
+      data[i + 1] += delta;
+      data[i + 2] += delta;
+    }
+    this.actx.putImageData(image, 0, 0);
   }
 
   render(ctx: CanvasRenderingContext2D): void {

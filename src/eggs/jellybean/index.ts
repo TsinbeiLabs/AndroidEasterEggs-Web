@@ -11,10 +11,12 @@ import type { Egg, EggContext } from '../../core/types';
  *
  * BeanBag: 40 beans drifting at constant velocity with no gravity and no
  * collisions (upstream computes `overlap()` and throws the result away).
- * z = (i/40)^2 gives 40 depth layers, scale 0.2..1, speed 0..40 px/s per axis,
- * spin +/-30 deg/s. Dragging applies the upstream velocity EMA and releasing
- * flings the bean with a spin of up to 1080 deg/s. 1/9 of the beans have a
- * face and 0.1 % are an untinted candy cane.
+ * z = (i/40)^2 gives 40 depth layers, scale 0.2..1, speed up to +/-38 px/s per
+ * axis, spin +/-30 deg/s. Dragging applies the upstream velocity EMA and
+ * releasing flings the bean with a spin of up to 1080 deg/s. Recycling re-runs
+ * `pickBean()` and re-rolls every kinematic value, then streams the bean in from
+ * the edge it is travelling in from and into the half of the board it will
+ * cross. 1/9 of the beans have a face and 0.1 % are an untinted candy cane.
  */
 
 const LONG_PRESS_MS = 500;
@@ -28,7 +30,12 @@ const RECYCLE_MARGIN = 576;
 const BEAN_W = 118;
 const BEAN_H = BEAN_W * (161 / 243);
 
-/** Candy cane: drawn in its own 220 x 270 box, shown at 96 x 190 CSS px. */
+/**
+ * Candy cane (`j_jandycane`, 131 x 256 px = 43.7 x 85.3 dp at density 480): the
+ * centrelines are authored in a 200 x 270 box that is then fit into 96 x 190 CSS
+ * px, so the mapping is deliberately non-uniform (0.48 x, 0.70 y) to reach the
+ * sprite's tall aspect from a squarer drawing space.
+ */
 const CANE_MIN_X = 20;
 const CANE_MIN_Y = 0;
 const CANE_BOX_W = 200;
@@ -238,6 +245,8 @@ interface Bean {
   vy: number;
   angle: number;
   va: number;
+  /** Depth layer, fixed for the bean's lifetime: `(i / NUM_BEANS)^2`. */
+  z: number;
   scale: number;
   tint: string | null;
   face: boolean;
@@ -262,43 +271,66 @@ export default function createJellyBean(context: EggContext): Egg {
 
   const makeBean = (i: number, scatter: boolean): Bean => {
     const z = Math.pow(i / NUM_BEANS, 2);
-    const scale = MIN_SCALE + (MAX_SCALE - MIN_SCALE) * z;
-    const cane = context.random() <= LUCKY;
-    // 8/9 plain bean, 1/9 bean with a face (`j_redbeandroid`).
-    const face = !cane && context.random() < 1 / 9;
     const bean: Bean = {
       x: 0,
       y: 0,
-      vx: (context.random() * 80 - 40) * z,
-      vy: (context.random() * 80 - 40) * z,
-      angle: context.random() * 360,
-      va: context.random() * 60 - 30,
-      scale,
-      tint: cane ? null : context.pick(TINTS),
-      face,
-      cane,
+      vx: 0,
+      vy: 0,
+      angle: 0,
+      va: 0,
+      z,
+      scale: MIN_SCALE + (MAX_SCALE - MIN_SCALE) * z,
+      tint: null,
+      face: false,
+      cane: false,
       grabbed: false,
     };
     resetBean(bean, scatter);
     return bean;
   };
 
+  /**
+   * `BeanBag.java:181-205`. `reset()` runs `pickBean()` and re-rolls *every*
+   * kinematic value, so a bean that drifts off screen comes back as a different
+   * sprite in a different colour heading a different way — only `z` (and hence
+   * `scale`) survives for the bean's lifetime.
+   */
   const resetBean = (bean: Bean, scatter: boolean): void => {
     const { width, height, random } = context;
+
+    // pickBean(): uniform over the 9 entry BEANS table (8 plain, 1 `j_redbeandroid`
+    // with a face), then LUCKY = 0.001 overrides it with an untinted `j_jandycane`.
+    bean.cane = random() <= LUCKY;
+    bean.face = !bean.cane && random() < 1 / 9;
+    bean.tint = bean.cane ? null : context.pick(TINTS);
+
+    // `r = 0.3f * Math.max(h, w) * scale` on the raw sprite; the port applies the
+    // same rule to the drawn box, which is what it uses for size everywhere else.
     const w = (bean.cane ? CANE_W : BEAN_W) * bean.scale;
     const h = (bean.cane ? CANE_H : BEAN_H) * bean.scale;
+    const r = 0.3 * Math.max(w, h);
+
+    bean.angle = random() * 360;
+    bean.va = random() * 60 - 30;
+    bean.vx = (random() * 80 - 40) * bean.z;
+    bean.vy = (random() * 80 - 40) * bean.z;
+
     if (scatter) {
+      // The board's first loop overrides the streaming position with a uniform
+      // scatter (`BeanBag.java:299-300`).
       bean.x = random() * width;
       bean.y = random() * height;
       return;
     }
-    const horizontal = random() < 0.5;
-    if (horizontal) {
-      bean.x = bean.vx < 0 ? width + w : -w;
-      bean.y = random() * Math.max(1, height - h);
+
+    // Enter from the edge the bean is travelling in from, and only into the half of
+    // the board it will actually cross (`flip()` picks the axis).
+    if (random() < 0.5) {
+      bean.x = bean.vx < 0 ? width + 2 * r : -4 * r;
+      bean.y = random() * Math.max(0, height - 3 * r) * 0.5 + (bean.vy < 0 ? height * 0.5 : 0);
     } else {
-      bean.y = bean.vy < 0 ? height + h : -h;
-      bean.x = random() * Math.max(1, width - w);
+      bean.y = bean.vy < 0 ? height + 2 * r : -4 * r;
+      bean.x = random() * Math.max(0, width - 3 * r) * 0.5 + (bean.vx < 0 ? width * 0.5 : 0);
     }
   };
 
@@ -315,15 +347,44 @@ export default function createJellyBean(context: EggContext): Egg {
   };
 
   const beanAt = (px: number, py: number): Bean | null => {
+    const { ctx } = context;
     // Iterate back to front so the topmost bean wins.
     for (let i = beans.length - 1; i >= 0; i--) {
       const bean = beans[i];
-      const w = (bean.cane ? CANE_W : BEAN_W) * bean.scale;
-      const h = (bean.cane ? CANE_H : BEAN_H) * bean.scale;
-      if (Math.abs(px - bean.x) > w * 0.62 || Math.abs(py - bean.y) > h * 0.62) continue;
-      // Upstream samples the sprite's alpha; the bbox test is close enough and
-      // keeps hit testing cheap for 40 beans.
-      return bean;
+      const boxW = bean.cane ? CANE_BOX_W : BEAN_BOX_W;
+      const boxH = bean.cane ? CANE_BOX_H : BEAN_BOX_H;
+      const drawW = (bean.cane ? CANE_W : BEAN_W) * bean.scale;
+      const drawH = (bean.cane ? CANE_H : BEAN_H) * bean.scale;
+      const rad = (-bean.angle * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const dx = px - bean.x;
+      const dy = py - bean.y;
+
+      // Cheap reject on the axis-aligned bounds of the rotated sprite.
+      if (Math.abs(dx) > (drawW * Math.abs(cos) + drawH * Math.abs(sin)) / 2) continue;
+      if (Math.abs(dy) > (drawW * Math.abs(sin) + drawH * Math.abs(cos)) / 2) continue;
+
+      if (bean.cane) {
+        // The cane is a stroke rather than a filled path, so its box is the hit area.
+        return bean;
+      }
+
+      // `BeanBag.java:230-243` rejects the touch when the sampled sprite pixel is
+      // transparent; testing the silhouette path is the vector equivalent. The point
+      // is mapped into path space by hand and tested under an identity transform so
+      // the host's DPR scaling cannot skew the result.
+      const rx = dx * cos - dy * sin;
+      const ry = dx * sin + dy * cos;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const hit = ctx.isPointInPath(
+        BEAN_PATH,
+        (rx * boxW) / drawW + boxW / 2,
+        (ry * boxH) / drawH + boxH / 2,
+      );
+      ctx.restore();
+      if (hit) return bean;
     }
     return null;
   };
@@ -367,7 +428,8 @@ export default function createJellyBean(context: EggContext): Egg {
     }
     if (!revealFace) revealFace = true;
     const minor = context.randomInt(1, 3);
-    context.toast(`Android 4.${minor} · JELLY BEAN`, 2.5);
+    // `Toast.LENGTH_LONG` = 3.5 s (`PlatLogoActivity.java:91`).
+    context.toast(`Android 4.${minor} · JELLY BEAN`, 3.5);
   });
 
   const offFrame = context.onFrame((dt, t) => {
@@ -396,11 +458,12 @@ export default function createJellyBean(context: EggContext): Egg {
     const scale = Math.min(availW / BEAN_BOX_W, availH / BEAN_BOX_H) * 0.86 * logoScale;
 
     ctx.save();
-    ctx.globalAlpha = logoAlpha;
     ctx.translate(width / 2, height / 2);
     ctx.scale(scale, scale);
     ctx.translate(-BEAN_BOX_W / 2, -BEAN_BOX_H / 2);
-    drawBeanShape(ctx, '#FF0000', revealFace);
+    // `drawBeanShape` assigns `ctx.globalAlpha` outright rather than multiplying, so
+    // the entry fade has to be handed to it or the bean pops in at full opacity.
+    drawBeanShape(ctx, '#FF0000', revealFace, logoAlpha);
     ctx.restore();
   }
 
@@ -442,6 +505,10 @@ export default function createJellyBean(context: EggContext): Egg {
       ctx.translate(bean.x, bean.y);
       ctx.rotate((bean.angle * Math.PI) / 180);
       ctx.scale(drawW / boxW, drawH / boxH);
+      // `BeanBag.java:332-333` writes the view back as `setX(x - pivotX)` /
+      // `setY(y - pivotY)`, so `(x, y)` is the bean's rotation centre, not its
+      // top-left corner; without this the sprite would swing around a corner.
+      ctx.translate(-boxW / 2, -boxH / 2);
       if (bean.cane) ctx.translate(-CANE_MIN_X, -CANE_MIN_Y);
       drawBeanShape(ctx, bean.tint, bean.face);
       ctx.restore();
@@ -488,12 +555,21 @@ export default function createJellyBean(context: EggContext): Egg {
     id: 'bag',
     label: '打开 BeanBag',
     run: () => {
-      if (scene === 'platlogo') enterBeanBag();
-      else {
-        scene = 'platlogo';
-        logoScale = 1;
-        logoAlpha = 1;
+      if (scene === 'platlogo') {
+        enterBeanBag();
+        return;
       }
+      // Upstream `finish()`es PlatLogoActivity when BeanBag starts, so coming back
+      // is a brand new activity: `j_platlogo_alt` again, nothing grabbed.
+      scene = 'platlogo';
+      logoScale = 1;
+      logoAlpha = 1;
+      revealFace = false;
+      downAt = -1;
+      longPressed = false;
+      if (dragged !== null) dragged.grabbed = false;
+      dragged = null;
+      beans.length = 0;
     },
   });
 

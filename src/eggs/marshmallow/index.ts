@@ -16,7 +16,8 @@ import { drawMarshmallow, type MarshmallowLook } from '../shared/flappyArt';
  * size/3, never spinning), 8 dp chocolate stems (1 % candy cane), three scenes
  * (city / Texas cacti / Zurich mountains), per-player death with an 80 ms buzz,
  * pipe-id scoring, a splash with a play button and a 3-2-1-0 countdown, and the
- * 100 px touch overlay.
+ * 100 px touch overlay. Each finger owns the screen column it is in, so several
+ * players can be flown at once.
  */
 
 const M_SHADOW = new Path2D('M13.5,34.5 l13.3,13.3 c11,-1.3 19.7,-10 21,-21 L34.5,13.5 L13.5,34.5 z');
@@ -28,10 +29,25 @@ const M_FOOT_RIGHT = new Path2D('M34.5,34.5 l0,-10.5 l-10.5,10.5 z');
 const MM_BODY = new Path2D(
   'M34.9,13.2 c-0.8,-0.8 -4.2,-2.4 -10.9,-2.4 s-10.1,1.6 -10.9,2.4 c-0.8,0.8 -2.4,4.2 -2.4,10.9 s1.6,10.1 2.4,10.9 c0.8,0.8 4.2,2.4 10.9,2.4 s10.1,-1.6 10.9,-2.4 c0.8,-0.8 2.4,-4.2 2.4,-10.9 S35.6,14 34.9,13.2 z',
 );
+/** `m_platlogo.xml`'s second path: the top face, x 13.3..34.7, y 10.8..16.6. */
+const MM_TOP = new Path2D(
+  'M34.7,13.7 c0,0.8 -1.2,1.5 -3.1,2.1 c-1.9,0.5 -4.6,0.8 -7.6,0.8 s-5.6,-0.3 -7.6,-0.8 ' +
+    'c-1.9,-0.5 -3.1,-1.2 -3.1,-2.1 s1.2,-1.5 3.1,-2.1 c1.9,-0.5 4.6,-0.8 7.6,-0.8 ' +
+    's5.6,0.3 7.6,0.8 C33.5,12.1 34.7,12.9 34.7,13.7 z',
+);
+/** `m_platlogo.xml`'s last two paths: the candy's two splayed antennae. */
+const MM_ANTENNAE = new Path2D(
+  'M30,13 c-0.1,0 -0.1,0 -0.2,0 c-0.4,-0.1 -0.7,-0.6 -0.6,-1 l1.3,-5.5 c0.1,-0.4 0.6,-0.7 1,-0.6 ' +
+    'c0.4,0.1 0.7,0.6 0.6,1 l-1.3,5.5 C30.7,12.7 30.4,13 30,13 z' +
+    'M18,13 c-0.4,0 -0.7,-0.3 -0.8,-0.6 l-1.3,-5.5 c-0.1,-0.4 0.2,-0.9 0.6,-1 c0.4,-0.1 0.9,0.2 1,0.6 ' +
+    'l1.3,5.5 c0.1,0.4 -0.2,0.9 -0.6,1 C18.1,13 18.1,13 18,13 z',
+);
 
 const LONG_PRESS_MS = 500;
 const TAPS_TO_ARM = 5;
 const HOLD_KEYS = ['Space', 'ArrowUp', 'Enter', 'KeyW'];
+/** Stand-ins for upstream's one-gamepad-per-player mapping (`getControllerPlayer`). */
+const DIGIT_KEYS = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'];
 
 function hsv(h: number, s: number, v: number): string {
   const i = Math.floor(h * 6);
@@ -49,7 +65,7 @@ function hsv(h: number, s: number, v: number): string {
       [v, p, q],
     ] as number[][]
   )[i % 6] as [number, number, number];
-  const to = (x: number) => Math.round(x * 255);
+  const to = (x: number): number => Math.trunc(x * 255);
   return `rgb(${to(r)}, ${to(g)}, ${to(b)})`;
 }
 
@@ -57,32 +73,56 @@ const MLAND_CONFIG: FlappyConfig = {
   popSize: 130,
   stemWidth: 8,
   gap: 140,
+  // `m_obstacle_height_min` is 48dp, but Params' sanity check bumps it to
+  // OBSTACLE_WIDTH/2 + 1 = 66 because 48 <= 130/2 (MLand.java:134-137).
   obstacleMin: 66,
   buildingWidthMin: 50,
   popHitFraction: 1 / 3,
-  hudRadius: 4,
-  hudTextSize: 22,
+  hud: {
+    radius: 4,
+    textSize: 22,
+    bold: true,
+    padX: 12,
+    centered: true,
+    top: 12,
+    left: 0,
+    chipHeight: 40,
+    gap: 0,
+  },
   maxPlayers: 6,
   scenes: ['city', 'tx', 'zrh'],
+  // `Player.sColors`, assigned round-robin (0xFF78C557 is commented out upstream).
+  playerColors: ['#DB4437', '#3B78E7', '#F4B400', '#0F9D58', '#7B1880', '#9E9E9E'],
   stemColors: ['#BCAAA4', '#A1887F'],
   candyCaneStemChance: 0.01,
+  // MLand.java:1409-1410: OBSTACLE_WIDTH * 0.4 deep, painted through a
+  // PorterDuffColorFilter(0x22000000, MULTIPLY) ~= 13 % black.
+  stemShadowDepth: 0.4,
+  stemShadowColor: 'rgba(0, 0, 0, 0.133)',
   scoreByPipeId: true,
   showTouches: true,
   splash: true,
   vibrateOnDeath: true,
   weightedSky: true,
+  startYJitter: true,
+  // `m_scenery_z` is declared but the setTranslationZ call is commented out
+  // ("no more shadows for these things"), so MLand scenery keeps child order.
+  sceneryZ: 0,
   makePop: (random, top): PopVisual => {
     const look: MarshmallowLook = {
+      // `antenna = pick(ANTENNAE)` — always present.
       antenna: random() < 0.5 ? 0 : 1,
       eyes: random() > 0.5 ? (random() < 0.5 ? 0 : 1) : -1,
       mouth: -1,
     };
     if (look.eyes >= 0 && random() > 0.8) {
-      look.mouth = Math.floor(random() * 4) as 0 | 1 | 2 | 3;
+      // `pick(MOUTHS)` = MOUTHS[irand(0, 3)], and MLand's irand rounds.
+      look.mouth = Math.min(3, Math.round(random() * 3)) as 0 | 1 | 2 | 3;
     }
     return {
+      // MLand never assigns `mRotate`, so its pops do not spin.
       spin: 0,
-      mirrorX: false,
+      // `p1.setScaleY(-0.25f)` animated to -1: the top marshmallow is flipped.
       mirrorY: top,
       render: (ctx, size) => drawMarshmallow(ctx, size, look),
     };
@@ -111,7 +151,9 @@ export default function createMarshmallow(context: EggContext): Egg {
   let downAt = -1;
   let wasDown = false;
   let wasKey = false;
-  let activePlayer = 0;
+  const wasDigit = [false, false, false, false, false, false];
+  /** pointerId -> the player that finger is flying, so lifts release the right one. */
+  const flying = new Map<number, number>();
   const ripples: Ripple[] = [];
 
   let game: FlappyGame | null = null;
@@ -121,6 +163,7 @@ export default function createMarshmallow(context: EggContext): Egg {
       context.store.set('m_egg_mode', Date.now());
     }
     scene = 'mland';
+    flying.clear();
     game = new FlappyGame(
       {
         get width() {
@@ -129,10 +172,9 @@ export default function createMarshmallow(context: EggContext): Egg {
         get height() {
           return context.height;
         },
+        ctx: context.ctx,
         random: () => context.random(),
         randomInt: (min, max) => context.randomInt(min, max),
-        pick: (items) => context.pick(items),
-        toast: (message, seconds) => context.toast(message, seconds),
       },
       MLAND_CONFIG,
     );
@@ -146,23 +188,42 @@ export default function createMarshmallow(context: EggContext): Egg {
       const gameRef = game;
       if (gameRef === null) return;
 
-      const splashHit = gameRef.splashHit(context.pointer.x, context.pointer.y);
-      if (context.pointer.down && !wasDown) {
-        if (splashHit === 'play') gameRef.pressPlay();
-        else if (splashHit === 'plus') gameRef.setPlayerCount(gameRef.scores.length + 1);
-        else if (splashHit === 'minus') gameRef.setPlayerCount(Math.max(1, gameRef.scores.length - 1));
-        else {
-          activePlayer = gameRef.playerIndexAt(context.pointer.x);
-          gameRef.poke(activePlayer, context.pointer.x, context.pointer.y);
+      // MLand.onTouchEvent tracks every finger through getActionIndex() and gives
+      // each one the player whose column it landed in, so N fingers fly N droids.
+      for (const pointer of context.pointers) {
+        if (!pointer.justPressed) continue;
+        const hit = gameRef.splashHit(pointer.x, pointer.y);
+        if (hit === 'play') {
+          gameRef.pressPlay();
+        } else if (hit === 'plus') {
+          gameRef.setPlayerCount(gameRef.playerCount + 1);
+        } else if (hit === 'minus') {
+          gameRef.setPlayerCount(gameRef.playerCount - 1);
+        } else {
+          const index = gameRef.playerIndexAt(pointer.x);
+          flying.set(pointer.id, index);
+          gameRef.poke(index, pointer.x, pointer.y);
         }
       }
-      if (!context.pointer.down && wasDown) gameRef.unpoke(activePlayer);
-      wasDown = context.pointer.down;
+      for (const [id, index] of flying) {
+        const pointer = context.pointers.find((item) => item.id === id);
+        if (pointer !== undefined && pointer.down) continue;
+        flying.delete(id);
+        gameRef.unpoke(index);
+      }
 
+      // Keys map to player 0, exactly like a device with no gamepad attached.
       const held = HOLD_KEYS.some((code) => context.keys.has(code));
-      if (held && !wasKey) gameRef.poke(0, context.pointer.x, context.pointer.y);
+      if (held && !wasKey) gameRef.pokeKey(0);
       if (!held && wasKey) gameRef.unpoke(0);
       wasKey = held;
+
+      DIGIT_KEYS.forEach((code, i) => {
+        const down = context.keys.has(code);
+        if (down && !wasDigit[i]) gameRef.pokeKey(i);
+        if (!down && wasDigit[i]) gameRef.unpoke(i);
+        wasDigit[i] = down;
+      });
 
       gameRef.update(dt);
       gameRef.render(context.ctx);
@@ -268,26 +329,15 @@ export default function createMarshmallow(context: EggContext): Egg {
     ctx.fill(M_FOOT_RIGHT);
 
     if (marshmallowAlpha > 0.001) {
+      ctx.save();
       ctx.globalAlpha = marshmallowAlpha;
       ctx.fillStyle = '#FFFFFF';
       ctx.fill(MM_BODY);
-      ctx.save();
-      ctx.globalAlpha = marshmallowAlpha * 0.87;
       ctx.fillStyle = '#EBEBEB';
-      ctx.beginPath();
-      ctx.ellipse(24, 13.7, 10.7, 1.6, 0, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.fill(MM_TOP);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fill(MM_ANTENNAE);
       ctx.restore();
-
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 1.4;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(31.7, 5.9);
-      ctx.lineTo(29.9, 12.9);
-      ctx.moveTo(16.5, 5.9);
-      ctx.lineTo(18.2, 12.9);
-      ctx.stroke();
     }
     ctx.restore();
 
@@ -322,17 +372,20 @@ export default function createMarshmallow(context: EggContext): Egg {
       } else {
         scene = 'platlogo';
         game = null;
+        flying.clear();
         wasDown = false;
         wasKey = false;
+        wasDigit.fill(false);
       }
     },
   });
 
   return {
-    hint: '点 5 次以上再长按进入 MLand；splash 上按播放，可用 ± 增加玩家',
+    hint: '点 5 次以上再长按进入 MLand；splash 上按播放，可用 ± 增加玩家，多指各控一列（键盘 1-6）',
     destroy() {
       offFrame();
       tweens.cancelAll();
+      flying.clear();
       game = null;
     },
   };

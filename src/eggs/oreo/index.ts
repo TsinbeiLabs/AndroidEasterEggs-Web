@@ -15,10 +15,14 @@ import type { Egg, EggContext } from '../../core/types';
  * with a 4 unit mouth slit, two r=6 eyes at (+/-16, -12) that blink for 200 ms
  * at p=0.001 per frame, and eight 3-link tentacles anchored along y=+26 at
  * x = bias*30. Link 1 is rigid, links 2 and 3 are SpringForce chains with
- * dampingRatio 0.3 and stiffness 10 and 5. Tentacles are tapered strokes: discs
- * of radius lerp(14 -> 2) stamped every max(r/4, 800/sizePx) units. Drift runs
- * at ay=30 with vy clamped to 35, a -100 jet impulse every 5-10 s and
- * ax = 15*sin(t*0.25). Dragging moves the head 1:1 and releasing always jets.
+ * dampingRatio 0.3 (DAMPING_RATIO_LOW_BOUNCY) and stiffness 50
+ * (STIFFNESS_VERY_LOW) and 25 (STIFFNESS_VERY_LOW / 2). Tentacles are tapered
+ * strokes: discs of radius lerp(14 -> 2) stamped every max(r/4, 800/sizePx)
+ * units, always ending with a disc at the path end. Drift runs at ay=30 with
+ * vy clamped to 35, a -100 jet impulse every 5-10 s and ax = 15*sin(t*0.25).
+ * Only a press that lands on the octopus grabs it (hitTest on ACTION_DOWN);
+ * releasing resumes the drift with the TimeAnimator clock reset to 0 while
+ * the velocities and the next-jump time persist, exactly like cancel()+start().
  */
 
 const BASE_SCALE = 100;
@@ -34,11 +38,42 @@ const MAX_VY = 35;
 const JUMP_VY = -100;
 const MAX_VX = 15;
 const GRAVITY = 30;
-/** Spring integration is only stable for small steps; clamp long frames. */
-const SPRING_MAX_DT = 1 / 30;
+
+/** `SpringForce.DAMPING_RATIO_LOW_BOUNCY`. */
+const DAMPING_RATIO = 0.3;
+/** `SpringForce.STIFFNESS_LOW` — link 1 is always locked, this is never simulated. */
+const STIFFNESS_LOW = 200;
+/** `SpringForce.STIFFNESS_VERY_LOW`. */
+const STIFFNESS_VERY_LOW = 50;
 
 const LONG_PRESS_MS = 500;
 const TAPS_TO_ARM = 5;
+
+/**
+ * `o_platlogo.xml`: the darker lower-right cookie chip is NOT a radial wedge —
+ * its straight edges run from the r=14 circle out to the r=20 circle along
+ * y = x -/+ 19.8, so the exact pathData is reused verbatim (48 unit viewport).
+ */
+const OREO_CHIP = new Path2D(
+  'M44,24.2010101 L33.9004889,14.101499 L14.101499,33.9004889 L24.2010101,44' +
+    ' C29.2525804,43.9497929 34.2887564,41.9975027 38.1431296,38.1431296' +
+    ' C41.9975027,34.2887564 43.9497929,29.2525804 44,24.2010101 Z',
+);
+const OREO_CHIP_INNER = new Path2D(
+  'M37.7829445,26.469236 L29.6578482,18.3441397 L18.3441397,29.6578482 L26.469236,37.7829445' +
+    ' C29.1911841,37.2979273 31.7972024,36.0037754 33.9004889,33.9004889' +
+    ' C36.0037754,31.7972024 37.2979273,29.1911841 37.7829445,26.469236 Z',
+);
+/** `o_point_platlogo.xml`: the embossed 8.1 droid outline, stroked at width 1. */
+const POINT_DROID = new Path2D(
+  'M26.5 29.5v3c0 1.13-0.87 2-2 2s-2-0.87-2-2v-3h-1v3c0 1.13-0.87 2-2 2s-2-0.87-2-2v-3H17' +
+    'a1.5 1.5 0 0 1-1.5-1.5V17.5h13V28a1.5 1.5 0 0 1-1.5 1.5h-0.5z' +
+    'M13.5 17.5c1.13 0 2 0.87 2 2v7c0 1.13-0.87 2-2 2s-2-0.87-2-2v-7c0-1.13 0.87-2 2-2z' +
+    'M30.5 17.5c1.13 0 2 0.87 2 2v7c0 1.13-0.87 2-2 2s-2-0.87-2-2v-7c0-1.13 0.87-2 2-2z' +
+    'M26.3 12.11A6.46 6.46 0 0 1 28.5 17v0.5h-13V17a6.46 6.46 0 0 1 2.2-4.89l-0.9-0.9' +
+    'a0.98 0.98 0 0 1 0-1.41 0.98 0.98 0 0 1 1.4 0l1.26 1.25A6.33 6.33 0 0 1 22 10.5' +
+    'c0.87 0 1.73 0.2 2.54 0.55L25.8 9.8a0.98 0.98 0 0 1 1.4 0 0.98 0.98 0 0 1 0 1.4l-0.9 0.91z',
+);
 
 interface Link {
   x: number;
@@ -84,16 +119,21 @@ function makeOctopus(context: EggContext, width: number, height: number): Octopu
         makeLink(
           10 * bias + context.random() * 20,
           20 + context.random() * 30,
-          50,
+          STIFFNESS_LOW,
           true,
         ),
         makeLink(
           40 * bias + (context.random() * 120 - 60),
           30 + context.random() * 50,
-          10,
+          STIFFNESS_VERY_LOW,
           false,
         ),
-        makeLink(context.random() * 80 - 40, context.random() * 120 - 80, 5, false),
+        makeLink(
+          context.random() * 80 - 40,
+          context.random() * 120 - 80,
+          STIFFNESS_VERY_LOW / 2,
+          false,
+        ),
       ],
     });
   }
@@ -142,24 +182,44 @@ function linkEnd(link: Link): [number, number] {
   return [link.x + link.dx, link.y + link.dy];
 }
 
+/**
+ * `SpringForce.updateValueAndVelocity` (androidx.dynamicanimation, mass 1):
+ * the exact closed-form solution of the damped harmonic oscillator, which is
+ * what upstream integrates once per display frame.
+ */
+function springStep(
+  value: number,
+  velocity: number,
+  target: number,
+  stiffness: number,
+  dt: number,
+): [number, number] {
+  const naturalFreq = Math.sqrt(stiffness);
+  const dampedFreq = naturalFreq * Math.sqrt(1 - DAMPING_RATIO * DAMPING_RATIO);
+  const decay = Math.exp(-DAMPING_RATIO * naturalFreq * dt);
+  const cosCoeff = decay;
+  const sinCoeff = (1 / dampedFreq) * DAMPING_RATIO * naturalFreq * decay;
+  const displacement = (value - target) * cosCoeff + velocity * sinCoeff;
+  const newVelocity =
+    (value - target) * (-sinCoeff) * dampedFreq * dampedFreq + velocity * cosCoeff;
+  return [displacement + target, newVelocity];
+}
+
 function stepSprings(octo: Octopus, dt: number): void {
   for (const arm of octo.arms) {
     const [l1, l2, l3] = arm.links;
-    const [l1ex, l1ey] = linkEnd(l1);
-    const [l2ex, l2ey] = linkEnd(l2);
 
-    for (const [link, tx, ty] of [
-      [l2, l1ex, l1ey],
-      [l3, l2ex, l2ey],
-    ] as Array<[Link, number, number]>) {
-      const damping = 2 * 0.3 * Math.sqrt(link.stiffness);
-      const ax = -link.stiffness * (link.x - tx) - damping * link.vx;
-      const ay = -link.stiffness * (link.y - ty) - damping * link.vy;
-      link.vx += ax * dt;
-      link.vy += ay * dt;
-      link.x += link.vx * dt;
-      link.y += link.vy * dt;
-    }
+    // Link 2 springs toward link 1's end.
+    const [l1ex, l1ey] = linkEnd(l1);
+    [l2.x, l2.vx] = springStep(l2.x, l2.vx, l1ex, l2.stiffness, dt);
+    [l2.y, l2.vy] = springStep(l2.y, l2.vy, l1ey, l2.stiffness, dt);
+
+    // Link 3 springs toward link 2's end, re-read AFTER link 2 moved: the
+    // chained `animateTo(end())` update listener retargets it within the same
+    // frame.
+    const [l2ex, l2ey] = linkEnd(l2);
+    [l3.x, l3.vx] = springStep(l3.x, l3.vx, l2ex, l3.stiffness, dt);
+    [l3.y, l3.vy] = springStep(l3.y, l3.vy, l2ey, l3.stiffness, dt);
   }
 }
 
@@ -213,14 +273,22 @@ function drawArm(ctx: CanvasRenderingContext2D, arm: Arm, color: string, minStep
   };
 
   ctx.fillStyle = color;
+  // `TaperedPathStroke.drawPath`: walk forward by max(r/4, minStep) and always
+  // stamp the final disc at t = len, so the tapered tip is never truncated.
   let d = 0;
-  while (d <= total) {
+  let last = false;
+  for (;;) {
+    if (d >= total) {
+      d = total;
+      last = true;
+    }
     const r = 14 + (2 - 14) * (d / total);
     const [x, y] = at(d);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
     d += Math.max(r * 0.25, minStep);
+    if (last) break;
   }
 }
 
@@ -240,9 +308,16 @@ function drawOctopus(ctx: CanvasRenderingContext2D, octo: Octopus): void {
   ctx.ellipse(px, py - 10, 40, 50, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // The mouth slit: the grey disc showing through a 4 unit gap in the mantle.
+  // The mouth slit: the mantle is drawn with `clipOutRect(x-61, y+8, x+61,
+  // y+12)`, so what shows through the 4 unit gap is the grey r=36 under-disc
+  // — clipped to that circle, not a free-floating bar.
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(px, py, 36, 0, Math.PI * 2);
+  ctx.clip();
   ctx.fillStyle = EYE_COLOR;
-  ctx.fillRect(px - 35.1, py + 8, 70.2, 4);
+  ctx.fillRect(px - 61, py + 8, 122, 4);
+  ctx.restore();
 
   ctx.fillStyle = EYE_COLOR;
   for (const dir of [-1, 1]) {
@@ -284,6 +359,8 @@ export default function createOreo(context: EggContext): Egg {
   let sceneStart = 0;
   let dragging = false;
   let driftTime = 0;
+  /** Host clock (ms since egg mount) of the current/last frame, for actions. */
+  let frameNow = 0;
 
   const enterAquarium = (now: number): void => {
     if (context.store.get<number>('o_egg_mode', 0) === 0) {
@@ -298,32 +375,55 @@ export default function createOreo(context: EggContext): Egg {
   };
 
   const offResize = context.onResize(() => {
-    if (scene === 'aquarium') octo = makeOctopus(context, context.width, context.height);
+    const oct = octo;
+    if (scene !== 'aquarium' || oct === null) return;
+    // `OctopusDrawable.onBoundsChange`: lockArms(true), moveTo(centre),
+    // lockArms(false) — the octopus keeps its size and identity.
+    const k = oct.sizePx / BASE_SCALE;
+    oct.px = context.width / 2 / k;
+    oct.py = context.height / 2 / k;
+    settleArms(oct);
   });
 
   const offFrame = context.onFrame((dt, t) => {
     const now = t * 1000;
+    frameNow = now;
     tweens.update(now);
 
-    if (context.pointer.down && !wasDown) downAt = now;
+    if (context.pointer.down && !wasDown) {
+      downAt = now;
+      if (scene === 'platlogo') {
+        // The RippleDrawable reacts on touch down.
+        ripples.push({ x: context.pointer.x, y: context.pointer.y, born: now });
+      } else if (octo !== null) {
+        // Ocquarium ACTION_DOWN: only a press that hits the octopus grabs it
+        // (`octo.hitTest`); moving over it later in the gesture does nothing.
+        const k = octo.sizePx / BASE_SCALE;
+        const x = context.pointer.x / k;
+        const y = context.pointer.y / k;
+        if (Math.hypot(x - octo.px, y - octo.py) < BASE_SCALE / 2) dragging = true;
+      }
+    }
     if (!context.pointer.down && wasDown) {
       const held = downAt < 0 ? 0 : now - downAt;
       downAt = -1;
       if (scene === 'platlogo') {
-        if (held >= LONG_PRESS_MS) {
-          if (taps >= TAPS_TO_ARM) {
-            enterAquarium(now);
-            wasDown = context.pointer.down;
-            return;
-          }
-        } else {
-          taps++;
-          ripples.push({ x: context.pointer.x, y: context.pointer.y, born: now });
+        if (held >= LONG_PRESS_MS && taps >= TAPS_TO_ARM) {
+          enterAquarium(now);
+          wasDown = context.pointer.down;
+          return;
         }
-      } else if (octo !== null) {
+        // Upstream every release performs a click — even a long press that
+        // returned false from `onLongClick` because fewer than 5 taps were
+        // armed — and each click ripples and counts.
+        taps++;
+      } else {
+        // ACTION_UP: touching = false; startDrift() — called for EVERY
+        // release, even a tap on empty water. Restarting the TimeAnimator
+        // resets totalTime to 0 while the listener fields (vx, vy, nextjump,
+        // unblink) persist; there is no jet on release.
         dragging = false;
-        octo.vy = JUMP_VY;
-        octo.nextJumpAt = driftTime + 5000 + context.random() * 5000;
+        driftTime = 0;
       }
     }
     wasDown = context.pointer.down;
@@ -336,22 +436,19 @@ export default function createOreo(context: EggContext): Egg {
     const oct = octo;
     if (oct === null) return;
 
-    sceneAlpha = Math.min(1, Math.max(0, (now - sceneStart - 500) / 5000));
+    // `bg.animate().setStartDelay(500).setDuration(5000).alpha(1f)` — a
+    // ViewPropertyAnimator, so it runs on AccelerateDecelerateInterpolator.
+    const fadeIn = Math.min(1, Math.max(0, (now - sceneStart - 500) / 5000));
+    sceneAlpha = 0.5 - Math.cos(Math.PI * fadeIn) / 2;
 
     const k = oct.sizePx / BASE_SCALE;
     const boundsW = context.width / k;
     const boundsH = context.height / k;
 
-    if (context.pointer.down) {
-      const x = context.pointer.x / k;
-      const y = context.pointer.y / k;
-      if (!dragging && Math.hypot(x - oct.px, y - oct.py) < BASE_SCALE / 2) {
-        dragging = true;
-      }
-      if (dragging) {
-        oct.px = x;
-        oct.py = y;
-      }
+    if (dragging && context.pointer.down) {
+      // ACTION_MOVE while touching: moveTo(x, y).
+      oct.px = context.pointer.x / k;
+      oct.py = context.pointer.y / k;
     }
 
     if (!dragging) {
@@ -360,25 +457,29 @@ export default function createOreo(context: EggContext): Egg {
         oct.vy = JUMP_VY;
         oct.nextJumpAt = driftTime + 5000 + context.random() * 5000;
       }
-      if (oct.blinking && driftTime > oct.unblinkAt) oct.blinking = false;
-      else if (!oct.blinking && context.random() < 0.001) {
+      // `onTimeUpdate`: the blink re-rolls every frame until it is time to
+      // unblink, so blinking can extend itself.
+      if (oct.unblinkAt > 0 && driftTime > oct.unblinkAt) {
+        oct.blinking = false;
+        oct.unblinkAt = 0;
+      } else if (context.random() < 0.001) {
         oct.blinking = true;
         oct.unblinkAt = driftTime + 200;
       }
 
       const ax = MAX_VX * Math.sin((driftTime / 1000) * 0.25);
       oct.vx = Math.max(-MAX_VX, Math.min(MAX_VX, oct.vx + dt * ax));
-      oct.vy = Math.max(-3500, Math.min(MAX_VY, oct.vy + dt * GRAVITY));
+      oct.vy = Math.max(-100 * MAX_VY, Math.min(MAX_VY, oct.vy + dt * GRAVITY));
 
-      if (oct.py - 50 > boundsH) oct.vy = JUMP_VY;
-      else if (oct.py + 100 < 0) oct.vy = MAX_VY;
+      if (oct.py - BASE_SCALE / 2 > boundsH) oct.vy = JUMP_VY;
+      else if (oct.py + BASE_SCALE < 0) oct.vy = MAX_VY;
 
       oct.px = Math.max(0, Math.min(boundsW, oct.px + dt * oct.vx));
       oct.py += dt * oct.vy;
     }
 
     repositionArms(oct);
-    stepSprings(oct, Math.min(dt, SPRING_MAX_DT));
+    stepSprings(oct, dt);
 
     const { ctx, width, height } = context;
     const sky = ctx.createLinearGradient(0, 0, 0, height);
@@ -399,7 +500,9 @@ export default function createOreo(context: EggContext): Egg {
     ctx.fillStyle = '#12141a';
     ctx.fillRect(0, 0, width, height);
 
-    const size = Math.max(40, Math.min(Math.min(width, height), 600) - 100) * scale;
+    // `PlatLogoActivity`: the view is min(min(w, h), 600dp) - 100dp with a
+    // 40dp padding on every side, so the drawable is 180 units below the cap.
+    const size = Math.max(40, Math.min(Math.min(width, height), 600) - 180) * scale;
     const cx = width / 2;
     const cy = height / 2;
     const k = size / 48;
@@ -446,10 +549,7 @@ export default function createOreo(context: EggContext): Egg {
     ctx.fill();
 
     ctx.fillStyle = '#FE9F00';
-    ctx.beginPath();
-    ctx.arc(24, 24, 20, -Math.PI / 4, (3 * Math.PI) / 4);
-    ctx.closePath();
-    ctx.fill();
+    ctx.fill(OREO_CHIP);
 
     ctx.fillStyle = '#FED44F';
     ctx.beginPath();
@@ -457,10 +557,7 @@ export default function createOreo(context: EggContext): Egg {
     ctx.fill();
 
     ctx.fillStyle = '#FFC107';
-    ctx.beginPath();
-    ctx.arc(24, 24, 14, -Math.PI / 4, (3 * Math.PI) / 4);
-    ctx.closePath();
-    ctx.fill();
+    ctx.fill(OREO_CHIP_INNER);
 
     ctx.fillStyle = '#FFFFFF';
     ctx.beginPath();
@@ -484,43 +581,13 @@ export default function createOreo(context: EggContext): Egg {
     ctx.arc(22, 22, 20, 0, Math.PI * 2);
     ctx.fill();
 
-    // Embossed droid outline.
+    // Embossed droid outline: the exact `o_point_platlogo` stroke path
+    // (transparent fill, #453F41 at width 1, butt caps and miter joins).
     ctx.strokeStyle = '#453F41';
     ctx.lineWidth = 1;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(17, 17.5);
-    ctx.lineTo(17, 27.5);
-    ctx.arc(18.5, 27.5, 1.5, Math.PI, 0, true);
-    ctx.lineTo(20, 22);
-    ctx.moveTo(28.5, 17.5);
-    ctx.lineTo(28.5, 27.5);
-    ctx.arc(27, 27.5, 1.5, 0, Math.PI, true);
-    ctx.lineTo(25.5, 22);
-    ctx.moveTo(15.5, 17);
-    ctx.arc(22, 17, 6.5, Math.PI, 0);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(19.5, 29.5);
-    ctx.lineTo(19.5, 33.5);
-    ctx.arc(20.5, 33.5, 1, Math.PI, 0, true);
-    ctx.lineTo(21.5, 29.5);
-    ctx.moveTo(24.5, 29.5);
-    ctx.lineTo(24.5, 33.5);
-    ctx.arc(25.5, 33.5, 1, Math.PI, 0, true);
-    ctx.lineTo(26.5, 29.5);
-    ctx.moveTo(13.5, 19.5);
-    ctx.lineTo(13.5, 26.5);
-    ctx.arc(13.5, 26.5, 2, Math.PI, 0, true);
-    ctx.moveTo(30.5, 19.5);
-    ctx.lineTo(30.5, 26.5);
-    ctx.arc(30.5, 26.5, 2, Math.PI, 0, true);
-    ctx.moveTo(16.6, 11.2);
-    ctx.lineTo(19, 15);
-    ctx.moveTo(27.2, 11.2);
-    ctx.lineTo(25, 15);
-    ctx.stroke();
+    ctx.lineCap = 'butt';
+    ctx.lineJoin = 'miter';
+    ctx.stroke(POINT_DROID);
 
     ctx.fillStyle = '#453F41';
     for (const ex of [19.5, 24.5]) {
@@ -529,14 +596,17 @@ export default function createOreo(context: EggContext): Egg {
       ctx.fill();
     }
 
-    ctx.strokeStyle = '#453F41';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 44; i++) {
-      const a = (i / 44) * Math.PI * 2;
+    // The dotted rim: 53 trapezoid ticks (the vector path is 53 subpaths plus
+    // a closing sliver that overlaps the first), spanning r 15.5..18.5 around
+    // (22, 22), each ~3.37 degrees wide, starting dead at 6 o'clock.
+    const tickWidth = (3.375 * Math.PI) / 180;
+    for (let i = 0; i < 53; i++) {
+      const a0 = ((90 - i * (360 / 53)) * Math.PI) / 180;
       ctx.beginPath();
-      ctx.moveTo(22 + Math.cos(a) * 15.5, 22 + Math.sin(a) * 15.5);
-      ctx.lineTo(22 + Math.cos(a) * 18.5, 22 + Math.sin(a) * 18.5);
-      ctx.stroke();
+      ctx.arc(22, 22, 18.5, a0 - tickWidth, a0);
+      ctx.arc(22, 22, 15.5, a0, a0 - tickWidth, true);
+      ctx.closePath();
+      ctx.fill();
     }
   }
 
@@ -565,8 +635,9 @@ export default function createOreo(context: EggContext): Egg {
       if (scene === 'platlogo') {
         scale = 1;
         alpha = 1;
-        enterAquarium(performance.now());
-        sceneStart = performance.now() - 600;
+        // `frameNow` is the host clock the fade is measured against —
+        // starting 600 ms "ago" skips most of the 500 ms delay.
+        enterAquarium(frameNow - 600);
       } else {
         scene = 'platlogo';
         octo = null;
@@ -575,7 +646,7 @@ export default function createOreo(context: EggContext): Egg {
   });
 
   return {
-    hint: '点 5 次以上再长按进入水族箱；按住章鱼可拖动，松手会喷水',
+    hint: '点 5 次以上再长按进入水族箱；按住章鱼可拖动，松手恢复漂移',
     destroy() {
       offFrame();
       offResize();

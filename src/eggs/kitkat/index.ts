@@ -1,5 +1,5 @@
 import { accelerate, anticipateOvershoot, decelerate } from '../../core/easing';
-import { Tweens } from '../../core/tween';
+import { Tweens, type TweenHandle } from '../../core/tween';
 import type { Egg, EggContext } from '../../core/types';
 import {
   bakeDesserts,
@@ -15,7 +15,8 @@ import {
  * Android 4.4 KitKat.
  *
  * PlatLogo: a giant white "K" over a 75 % black scrim. Each of the first five
- * taps spins it a full turn in 700 ms (decelerate, random direction); the sixth
+ * taps spins it a full turn in 700 ms (decelerate, random direction, snapping to a
+ * whole multiple of 360 deg and cancelling any spin still in flight); the sixth
  * tap — or a 500 ms long press — runs the reveal: the K shrinks and fades while
  * spinning (accelerate, 1000 ms), the KitKat red `#ED1D24` background expands
  * from scaleX 0.01 at +500 ms, the "Android" oval pops in over 500-1500 ms with
@@ -25,9 +26,9 @@ import {
  * DessertCase: a grid of 48 dp cells (192 dp * SCALE 0.25), each a random one of
  * 12 saturated colours, 70 % carrying a white dessert silhouette. Spans are
  * 1x1 67 %, 2x2 23 %, 3x3 9 %, 4x4 1 %, each rotated by a multiple of 90 deg.
- * After 1 s the grid fills with a 2 s staggered pop-in; 5 s later and every 2 s
- * after that exactly one random tile relocates, squashing whatever it lands on,
- * and the holes pop back in over 500 ms. Tapping a tile moves it.
+ * After 1 s the grid fills with a 2 s pop-in; 5 s later, and every 2 s after
+ * that, exactly one random tile relocates, squashing whatever it lands on, and the
+ * holes pop back in over 500 ms. Tapping a tile moves it.
  */
 
 const LONG_PRESS_MS = 500;
@@ -39,6 +40,28 @@ const START_DELAY = 5000;
 const JUGGLE_DELAY = 2000;
 const DURATION = 500;
 const CELL = 48;
+
+/** `DessertCaseView.java:123-125`. */
+const PROB_2X = 0.33;
+const PROB_3X = 0.1;
+const PROB_4X = 0.01;
+
+/**
+ * An evicted tile animates to `scaleX(0.5f)` / `scaleY(0.5f)` on a view whose layout
+ * size is `mCellSize` (`DessertCaseView.java:415-417`), so it collapses to half a
+ * cell no matter how large its span was.
+ */
+const SQUASH_SIZE = 0.5 * CELL;
+
+/**
+ * `AccelerateDecelerateInterpolator`, the default for `ViewPropertyAnimator` (and for
+ * `ValueAnimator`), so it drives every reveal tween that does not name an
+ * interpolator: the red background (`PlatLogoActivity.java:126`), the caption
+ * (`:142`) and the DessertCase pop-in (`DessertCaseView.java:340`).
+ */
+function accelerateDecelerate(t: number): number {
+  return Math.cos((t + 1) * Math.PI) / 2 + 0.5;
+}
 
 const LOGO_W = 920;
 const LOGO_H = 546;
@@ -83,6 +106,8 @@ export default function createKitKat(context: EggContext): Egg {
   let occupancy: Int32Array = new Int32Array(0);
   let cols = 0;
   let rows = 0;
+  let gridWidth = 0;
+  let gridHeight = 0;
   let nextTileId = 1;
   let started = false;
   let startedAt = 0;
@@ -90,10 +115,14 @@ export default function createKitKat(context: EggContext): Egg {
   let pendingFillAt = -1;
   let letterRotation = 0;
   let lastElapsed = 0;
+  /** `letter.animate().cancel()` — only one spin may own `letterRotation` at a time. */
+  let spinTween: TweenHandle | null = null;
 
   const index = (col: number, row: number) => row * cols + col;
 
   const rebuildGrid = () => {
+    gridWidth = context.width;
+    gridHeight = context.height;
     cols = Math.max(1, Math.ceil(context.width / CELL));
     rows = Math.max(1, Math.ceil(context.height / CELL));
     occupancy = new Int32Array(cols * rows);
@@ -133,11 +162,16 @@ export default function createKitKat(context: EggContext): Egg {
     return null;
   };
 
+  /**
+   * `DessertCaseView.java:379-392`. Upstream is an if / else-if chain, so a tile whose
+   * draw lands in a big-span band but whose cell is too close to the edge is silently
+   * downgraded all the way to 1x — it must not fall through into the next band.
+   */
   const pickSpan = (col: number, row: number): number => {
     const rnd = context.random();
-    if (rnd < 0.01 && col < cols - 3 && row < rows - 3) return 4;
-    if (rnd < 0.1 && col < cols - 2 && row < rows - 2) return 3;
-    if (rnd < 0.33 && col < cols - 1 && row < rows - 1) return 2;
+    if (rnd < PROB_4X) return col < cols - 3 && row < rows - 3 ? 4 : 1;
+    if (rnd < PROB_3X) return col < cols - 2 && row < rows - 2 ? 3 : 1;
+    if (rnd < PROB_2X) return col < cols - 1 && row < rows - 1 ? 2 : 1;
     return 1;
   };
 
@@ -149,7 +183,7 @@ export default function createKitKat(context: EggContext): Egg {
         duration: DURATION,
         ease: accelerate,
         from: tile.size,
-        to: tile.size * 0.5,
+        to: SQUASH_SIZE,
         onUpdate: (v) => {
           tile.size = v;
         },
@@ -269,6 +303,7 @@ export default function createKitKat(context: EggContext): Egg {
           tweens.add(
             {
               duration: animationLen,
+              ease: accelerateDecelerate,
               from: tile.size,
               to: targetSize,
               onUpdate: (v) => {
@@ -280,6 +315,7 @@ export default function createKitKat(context: EggContext): Egg {
           tweens.add(
             {
               duration: animationLen,
+              ease: accelerateDecelerate,
               from: 0,
               to: 1,
               onUpdate: (v) => {
@@ -330,13 +366,30 @@ export default function createKitKat(context: EggContext): Egg {
       },
       now,
     );
+    // `letter.animate().alpha(0f).scaleY(0.5f).scaleX(0.5f).rotationBy(360)` is one
+    // ViewPropertyAnimator, so the extra full turn shares the 1000 ms accelerate with
+    // the fade and the shrink. Starting it also cancels any tap spin still running.
+    spinTween?.cancel();
     spinFrom = letterRotation;
     spinTo = spinFrom + 360;
+    spinTween = tweens.add(
+      {
+        duration: 1000,
+        ease: accelerate,
+        from: spinFrom,
+        to: spinTo,
+        onUpdate: (v) => {
+          letterRotation = v;
+        },
+      },
+      now,
+    );
 
     tweens.add(
       {
         delay: 500,
         duration: 300,
+        ease: accelerateDecelerate,
         from: 0,
         to: 1,
         onUpdate: (v) => {
@@ -363,6 +416,10 @@ export default function createKitKat(context: EggContext): Egg {
       {
         delay: 500,
         duration: 1000,
+        // The same animator drives alpha, so it undershoots below 0 and overshoots
+        // past 1 exactly like the scale does; `drawPlatLogo` clamps it the way
+        // `View.setAlpha` would.
+        ease: anticipateOvershoot,
         from: 0,
         to: 1,
         onUpdate: (v) => {
@@ -375,6 +432,7 @@ export default function createKitKat(context: EggContext): Egg {
       {
         delay: 1000,
         duration: 1000,
+        ease: accelerateDecelerate,
         from: 0,
         to: 1,
         onUpdate: (v) => {
@@ -418,10 +476,14 @@ export default function createKitKat(context: EggContext): Egg {
       reveal(now);
       return;
     }
+    // `letter.animate().cancel()` (`PlatLogoActivity.java:112`): a tap interrupts the
+    // spin already in flight from wherever the K currently is, rather than stacking a
+    // second tween that fights it for `letterRotation`.
+    spinTween?.cancel();
     spinFrom = letterRotation;
     const direction = context.random() > 0.5 ? 360 : -360;
     spinTo = spinFrom + direction - (Math.trunc(letterRotation) % 360);
-    tweens.add(
+    spinTween = tweens.add(
       {
         duration: SPIN_MS,
         ease: decelerate,
@@ -435,12 +497,24 @@ export default function createKitKat(context: EggContext): Egg {
     );
   });
 
+  /**
+   * Android dispatches touch through the child's transform matrix
+   * (`isTransformedTouchPointInView`), so the hit area is the rotated square. Tiles
+   * come to rest on a multiple of 90 deg but sit at arbitrary angles mid-move, so the
+   * point is inverse-rotated about the tile centre instead of inflating the box by
+   * sqrt(2) — which over-selected neighbours by 42 %.
+   */
   const tileAt = (px: number, py: number): Tile | null => {
     let best: Tile | null = null;
     for (const tile of tiles) {
       if (!tile.alive || tile.alpha <= 0.05) continue;
-      const half = (tile.size / 2) * 1.42;
-      if (Math.abs(px - tile.cx) <= half && Math.abs(py - tile.cy) <= half) {
+      const rad = (-tile.rot * Math.PI) / 180;
+      const dx = px - tile.cx;
+      const dy = py - tile.cy;
+      const lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const half = tile.size / 2;
+      if (Math.abs(lx) <= half && Math.abs(ly) <= half) {
         if (best === null || tile.z > best.z) best = tile;
       }
     }
@@ -489,20 +563,24 @@ export default function createKitKat(context: EggContext): Egg {
   function drawPlatLogo(): void {
     const { ctx, width, height } = context;
 
+    // `Theme.Wallpaper` lets the live wallpaper show through; `#0b0b0c` stands in for
+    // it, and `mContent`'s own 0xC0000000 background sits on top of that permanently
+    // rather than being replaced once the red arrives.
     ctx.fillStyle = '#0b0b0c';
     ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillRect(0, 0, width, height);
 
+    // `bg` is the first child added (`PlatLogoActivity.java:92`), so the red expands
+    // underneath the letter, not over it.
     if (redAlpha > 0) {
       ctx.save();
-      ctx.globalAlpha = redAlpha;
+      ctx.globalAlpha = Math.min(1, redAlpha);
       ctx.translate(width / 2, 0);
       ctx.scale(redScaleX, 1);
       ctx.fillStyle = KITKAT_RED;
       ctx.fillRect(-width / 2, 0, width, height);
       ctx.restore();
-    } else {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-      ctx.fillRect(0, 0, width, height);
     }
 
     if (letterAlpha > 0.001) {
@@ -520,7 +598,10 @@ export default function createKitKat(context: EggContext): Egg {
       ctx.restore();
     }
 
-    if (logoAlpha > 0.001) drawLogo(logoAlpha, logoScale);
+    // AnticipateOvershoot undershoots to -0.15 and overshoots to 1.15; `View.setAlpha`
+    // clamps, and an out-of-range `globalAlpha` assignment is silently ignored, so the
+    // clamp has to be explicit.
+    if (logoAlpha > 0.001) drawLogo(Math.min(1, logoAlpha), logoScale);
 
     if (captionAlpha > 0.001) {
       ctx.save();
@@ -590,6 +671,23 @@ export default function createKitKat(context: EggContext): Egg {
 
   rebuildGrid();
 
+  /**
+   * `DessertCaseView.onSizeChanged` (`:236-284`) stops the case, tears the grid down,
+   * rebuilds `mCells` / `mFreeList` for the new dimensions and restarts it — without
+   * the 1 s `onResume` delay, hence `startedAt = 0`.
+   */
+  const offResize = context.onResize((w, h) => {
+    if (scene !== 'dessertcase') return;
+    if (gridWidth === w && gridHeight === h) return;
+    const wasStarted = started;
+    // Every in-flight tween belongs to a tile that is about to be discarded.
+    tweens.cancelAll();
+    spinTween = null;
+    rebuildGrid();
+    pendingFillAt = -1;
+    startedAt = wasStarted ? 0 : startedAt;
+  });
+
   context.actions.add({
     id: 'case',
     label: '打开 Dessert Case',
@@ -612,6 +710,7 @@ export default function createKitKat(context: EggContext): Egg {
       offDown();
       offUp();
       offFrame();
+      offResize();
       tweens.cancelAll();
     },
   };

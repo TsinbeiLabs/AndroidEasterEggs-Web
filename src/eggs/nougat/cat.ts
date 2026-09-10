@@ -99,6 +99,12 @@ function pathFor(part: Part): Path2D {
   return built;
 }
 
+/**
+ * `Cat.P_BODY_COLORS`. The last entry is declared as weight 1 upstream, but
+ * `chooseP` stops subtracting at `a.length - 2` and returns the final colour
+ * for every remaining `pct` in [959, 1000) — an effective weight of 41, which
+ * is what the random-HSV cat (`''`) has to use here to stay seed compatible.
+ */
 const BODY_TABLE: ReadonlyArray<readonly [number, string]> = [
   [180, '#212121'],
   [180, '#FFFFFF'],
@@ -229,10 +235,12 @@ export interface CatLook {
   whiteFeet: ReadonlySet<number>;
 }
 
-/** Reproduces `Cat`'s constructor exactly, including the RNG draw order. */
-export function catLook(seed: bigint): CatLook {
-  const rng = new JavaRandom(seed);
-
+/**
+ * Reproduces `Cat`'s constructor exactly, including the RNG draw order, and
+ * leaves `rng` positioned right after the bow tie roll — where Android 11+
+ * continues with the first-message draws.
+ */
+function consumeCatLook(rng: JavaRandom): CatLook {
   let body = chooseP(rng, BODY_TABLE);
   if (body === '') {
     const h = rng.nextFloat() * 360;
@@ -256,7 +264,9 @@ export function catLook(seed: bigint): CatLook {
     whiteFeet.add(rng.nextInt(4) + 1);
   }
 
-  const tailCapWhite = rng.nextFloat() < 1 / 3;
+  // `Cat.java`: `nsr.nextFloat() < 0.333f`, not < 1/3 — the two thresholds
+  // disagree for nextFloat() results in [0.333, 1/3), i.e. per-seed output.
+  const tailCapWhite = rng.nextFloat() < 0.333;
   const cap = isDark(body) ? chooseP(rng, LIGHT_SPOT_TABLE) : chooseP(rng, DARK_SPOT_TABLE);
   const collar = chooseP(rng, COLLAR_TABLE);
   const bowtie = rng.nextFloat() < 0.1 ? collar : '';
@@ -264,7 +274,10 @@ export function catLook(seed: bigint): CatLook {
   const dark = isDark(body);
   const eye = dark ? '#FFFFFF' : '#000000';
   let mouth = eye;
-  if (belly !== '' && !isDark(belly)) mouth = '#000000';
+  // `Cat.java`: the black mouth/nose re-tint keys off the FACE SPOT colour
+  // (`if (!isDark(faceColor)) tint(0xFF000000, D.mouth, D.nose)`), not belly.
+  // An absent face spot is colour 0, which `isDark` reports as dark.
+  if (faceSpot !== '' && !isDark(faceSpot)) mouth = '#000000';
 
   return {
     body,
@@ -279,6 +292,30 @@ export function catLook(seed: bigint): CatLook {
     bowtie,
     whiteFeet,
   };
+}
+
+/** Reproduces `Cat`'s constructor exactly, including the RNG draw order. */
+export function catLook(seed: bigint): CatLook {
+  return consumeCatLook(new JavaRandom(seed));
+}
+
+/**
+ * Android 11+ `Cat` constructor tail: `mFirstMessage` is drawn from the same
+ * seeded stream right after the bow tie — 10 % rare pool, one entry via
+ * `choose` (nextInt), then a 50 % chance of repeating it three times. The
+ * message is a pure function of the seed, exactly like the colours.
+ */
+export function catFirstMessage(
+  seed: bigint,
+  messages: readonly string[],
+  rareMessages: readonly string[],
+): string {
+  const rng = new JavaRandom(seed);
+  consumeCatLook(rng);
+  const pool = rng.nextFloat() < 0.1 ? rareMessages : messages;
+  if (pool.length === 0) return '';
+  const picked = pool[rng.nextInt(pool.length)] ?? '';
+  return rng.nextFloat() < 0.5 ? `${picked}${picked}${picked}` : picked;
 }
 
 function colorFor(part: PartName, look: CatLook): string {

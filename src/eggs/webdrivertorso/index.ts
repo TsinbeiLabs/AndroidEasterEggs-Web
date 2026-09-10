@@ -3,16 +3,19 @@ import type { Egg, EggContext } from '../../core/types';
 /**
  * Android L Preview — "Webdriver Torso".
  *
- * The famous YouTube test channel: a white page, one blue and one red rectangle
- * that jump to a new random geometry every 1000 ms (tweened over 200 ms), and a
- * monospace caption naming the fake video file. Long pressing the BLUE rectangle
- * is the actual easter egg — upstream it launches KitKat's Dessert Case, so here
- * it routes to the KitKat egg.
+ * The famous YouTube test channel: a white page, one blue (`Color.BLUE`, child 0) and
+ * one red (`Color.RED`, child 1) rectangle that jump to a new random geometry every
+ * 1000 ms, tweened over 200 ms with `ValueAnimator`'s default accelerate/decelerate,
+ * plus a bold 14 sp monospace caption at bottom left naming the fake video file.
+ * Long pressing the BLUE rectangle is the actual easter egg: upstream it stamps
+ * `l_egg_mode` and launches KitKat's Dessert Case, so here it routes to the KitKat egg.
  */
 
 const REFRESH_MS = 1000;
 const TWEEN_MS = 200;
 const LONG_PRESS_MS = 500;
+/** `ViewConfiguration.getScaledTouchSlop()`, used by `View.pointInView`. */
+const TOUCH_SLOP = 8;
 
 interface Rect {
   x: number;
@@ -21,18 +24,34 @@ interface Rect {
   h: number;
 }
 
-const BUILD_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+/**
+ * `AccelerateDecelerateInterpolator` — `RefreshTorso.kt:26-41` builds a bare
+ * `ValueAnimator.ofFloat(0f, 1f)` and never sets an interpolator, so it inherits
+ * `ValueAnimator`'s default rather than running linear.
+ */
+function accelerateDecelerate(t: number): number {
+  return Math.cos((t + 1) * Math.PI) / 2 + 0.5;
+}
 
+/** `Build.VERSION.INCREMENTAL` is a numeric changelist, e.g. `1273228`. */
 function randomBuild(random: () => number): string {
-  let out = 'L';
-  for (let i = 0; i < 5; i++) out += BUILD_CHARS[Math.floor(random() * BUILD_CHARS.length)];
-  return out;
+  return String(1000000 + Math.floor(random() * 9000000));
 }
 
 function randomRect(random: () => number, w: number, h: number): Rect {
   const rw = random() * w;
   const rh = random() * h;
   return { x: random() * (w - rw), y: random() * (h - rh), w: rw, h: rh };
+}
+
+/** `View.pointInView(x, y, slop)` in the view's own coordinate space. */
+function contains(rect: Rect, x: number, y: number, slop: number): boolean {
+  return (
+    x >= rect.x - slop &&
+    x <= rect.x + rect.w + slop &&
+    y >= rect.y - slop &&
+    y <= rect.y + rect.h + slop
+  );
 }
 
 export default function createWebdriverTorso(context: EggContext): Egg {
@@ -76,7 +95,7 @@ export default function createWebdriverTorso(context: EggContext): Egg {
       tweenStart = now;
     }
 
-    const p = tweenStart < 0 ? 1 : Math.min(1, (now - tweenStart) / TWEEN_MS);
+    const p = tweenStart < 0 ? 1 : accelerateDecelerate(Math.min(1, (now - tweenStart) / TWEEN_MS));
     current = [lerpRect(from[0], target[0], p), lerpRect(from[1], target[1], p)];
 
     ctx.fillStyle = '#FFFFFF';
@@ -96,9 +115,16 @@ export default function createWebdriverTorso(context: EggContext): Egg {
 
     if (context.pointer.down && !wasDown) {
       downAt = now;
-      const [bx, by] = [context.pointer.x, context.pointer.y];
-      const blue = current[0];
-      downOnBlue = bx >= blue.x && bx <= blue.x + blue.w && by >= blue.y && by <= blue.y + blue.h;
+      downOnBlue = contains(current[0], context.pointer.x, context.pointer.y, TOUCH_SLOP);
+    } else if (context.pointer.down && downOnBlue && downAt >= 0) {
+      // `View.onTouchEvent` drops the pending long press as soon as the pointer is no
+      // longer inside the view. The blue rect retargets every second and tweens there
+      // over 200 ms, so it can slide out from under a stationary finger; re-test the
+      // live geometry each frame instead of only on the way down.
+      if (!contains(current[0], context.pointer.x, context.pointer.y, TOUCH_SLOP)) {
+        downAt = -1;
+        downOnBlue = false;
+      }
     }
     if (context.pointer.down && downAt >= 0 && !launched && downOnBlue) {
       if (now - downAt >= LONG_PRESS_MS) {

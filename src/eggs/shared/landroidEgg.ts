@@ -1,4 +1,5 @@
 import type { Egg, EggContext } from '../../core/types';
+import { dailySeed } from './kotlinRandom';
 import { Landroid, type LandroidConfig } from './landroid';
 import type { PatchKind } from './patches';
 import { WarpLogo } from './warpLogo';
@@ -11,12 +12,17 @@ import { WarpLogo } from './warpLogo';
 
 export interface LandroidEggOptions {
   patch: PatchKind;
+  /** Android 14 shows the developer-preview art 10 % of the time. */
+  previewPatch: PatchKind | null;
   stars: number;
   planes: number;
   rotation: number;
   maxWarp: number;
   mode: 'linear' | 'radial';
   initialWarp: number;
+  centered: boolean;
+  tailFactor: number;
+  bloom: boolean;
   unlockKey: string;
   heptadecagram: boolean;
   landroid: LandroidConfig;
@@ -53,7 +59,11 @@ export function createLandroidEgg(context: EggContext, options: LandroidEggOptio
       maxWarp: options.maxWarp,
       mode: options.mode,
       initialWarp: options.initialWarp,
+      centered: options.centered,
+      tailFactor: options.tailFactor,
+      bloom: options.bloom,
       patch: options.patch,
+      previewPatch: options.previewPatch,
       unlockKey: options.unlockKey,
       heptadecagram: options.heptadecagram,
       onLaunch: startGame,
@@ -84,6 +94,25 @@ export function createLandroidEgg(context: EggContext, options: LandroidEggOptio
     label: '新宇宙',
     run: () => {
       game?.reroll();
+    },
+  });
+
+  context.actions.add({
+    id: 'seed',
+    label: '设定 seed',
+    run: () => {
+      if (game === null) startGame();
+      const current = game;
+      if (current === null) return;
+      const input = window.prompt(
+        '输入宇宙 seed（Android 用 dailySeed，例如今天是 ' +
+          `${dailySeed()}；留空则回到今天）`,
+        String(current.seed),
+      );
+      if (input === null) return;
+      const trimmed = input.trim();
+      current.setSeed(trimmed === '' ? dailySeed() : Number(trimmed));
+      context.toast(`宇宙 seed：${current.seed}`, 2);
     },
   });
 

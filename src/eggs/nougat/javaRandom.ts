@@ -44,12 +44,21 @@ export class JavaRandom {
     return this.next(24) / 0x1000000;
   }
 
+  /**
+   * `((long)(next(32)) << 32) + next(32)` — returned as a signed two's
+   * complement BigInt, so values with the top bit set are negative exactly as
+   * in Java.
+   */
   nextLong(): bigint {
-    return (BigInt(this.next(32)) << 32n) + BigInt(this.next(32));
+    const bits = (BigInt(this.next(32)) << 32n) | BigInt(this.next(32));
+    return bits >= 1n << 63n ? bits - (1n << 64n) : bits;
   }
 }
 
-/** `CatRandom.nextSeed()`: a uniformly random non-negative 64 bit long. */
+/**
+ * `CatRandom.nextSeed()` (`abs(random.nextLong())` upstream): a uniformly
+ * random non-negative 63 bit long.
+ */
 export function randomCatSeed(): bigint {
   const high = BigInt(Math.floor(Math.random() * 0x100000000)) << 32n;
   const low = BigInt(Math.floor(Math.random() * 0x100000000));
@@ -62,8 +71,11 @@ export function seedToString(seed: bigint): string {
 }
 
 export function seedFromString(value: string): bigint | null {
+  // `BigInt('')` is 0n in JS, so blank input has to be rejected explicitly rather
+  // than silently becoming seed 0.
+  if (value.trim() === '') return null;
   try {
-    const parsed = BigInt(value);
+    const parsed = BigInt(value.trim());
     return parsed < 0n ? -parsed : parsed;
   } catch {
     return null;

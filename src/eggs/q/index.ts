@@ -1,4 +1,4 @@
-import { Tweens } from '../../core/tween';
+import { Tweens, type TweenHandle } from '../../core/tween';
 import type { Egg, EggContext } from '../../core/types';
 import { colOf, GRID, ICONS, quantize, rowOf, runs, type PuzzleIcon } from './icons';
 
@@ -8,15 +8,21 @@ import { colOf, GRID, ICONS, quantize, rowOf, runs, type PuzzleIcon } from './ic
  * PlatLogo is a drag-and-align puzzle over a scrolling backslash backdrop: the
  * "1" glyph has to be rotated to 315 degrees and docked onto the "0" at
  * (+0.2w, +0.3w) to become the tail of a Q. Double tapping a piece spins it
- * 3600 degrees over 10 s (the "1" gets +315 for free). Seven successful docks
- * open the nonogram.
+ * 3600 degrees over 10 s on AccelerateDecelerate (the "1" gets +315 for free);
+ * like the upstream ObjectAnimator, the spin is cancelled on release, so it
+ * only advances while the piece is held. Seven successful docks open the
+ * nonogram.
  *
  * Quares renders a 16 x 16 grid with run-length clues; a clue turns `#3ddc84`
  * when its line is satisfied and the puzzle is won when every cell matches.
+ * Cells follow the `q_pixel_bg` selector: white (`q_pixel_off`) by default,
+ * black (`q_pixel_on`) when marked and `q_red` while pressed.
  */
 
 const DOUBLE_TAP_MS = 350;
 const SPIN_MS = 10000;
+/** ViewPropertyAnimator default duration, used by the dock snap. */
+const DOCK_MS = 300;
 const CLICKS_TO_UNLOCK = 7;
 const SNAP_DISTANCE = 0.2;
 const SNAP_TOLERANCE_DEG = 15;
@@ -25,9 +31,17 @@ const BACKSLASH_SPEED = 0.25; // px per ms
 const Q_GREEN = '#3ddc84';
 const Q_NAVY = '#073042';
 const Q_TAN = '#eff7cf';
+/** `q_red` — the pressed-cell colour from the `q_pixel_bg` selector. */
+const Q_RED = '#f8c734';
+/** `q_pixel_on` / `q_pixel_off`: a marked cell is BLACK on a white board. */
+const PIXEL_ON = '#000000';
+const PIXEL_OFF = '#FFFFFF';
+
+/** `AccelerateDecelerateInterpolator` — the default for ObjectAnimator/ViewPropertyAnimator. */
+const ACCEL_DECEL = (t: number): number => 0.5 - Math.cos(Math.PI * t) / 2;
 
 interface Piece {
-  id: 'one' | 'zero';
+  id: 'one' | 'zero' | 'text';
   x: number;
   y: number;
   size: number;
@@ -82,10 +96,21 @@ export default function createQ(context: EggContext): Egg {
   let lastTapPiece: Piece | null = null;
   let victoryButton: { x: number; y: number; w: number; h: number } | null = null;
   let victoryAt = -1;
+  /** Host clock (ms since egg mount) of the current/last frame, for tweens. */
+  let frameNow = 0;
+  /** Cell index held down in the nonogram, or -1 (`q_pixel_bg` state_pressed). */
+  let pressedCell = -1;
+  /** `bringChildToFront`: the last grabbed piece draws on top. */
+  let topPiece: Piece['id'] = 'zero';
 
-  const pieces: Record<'one' | 'zero', Piece> = {
+  const spinTweens = new Map<Piece, TweenHandle>();
+
+  const pieces: Record<Piece['id'], Piece> = {
     zero: { id: 'zero', x: 0, y: 0, size: 200, rotation: 0, scale: 1 },
     one: { id: 'one', x: 0, y: 0, size: 200, rotation: 0, scale: 1 },
+    // The wordmark ImageView shares the plain `tl` listener: it can be dragged
+    // and double-tap spun like the "0".
+    text: { id: 'text', x: 0, y: 0, size: 200, rotation: 0, scale: 1 },
   };
 
   let puzzle: Puzzle | null = null;
@@ -96,27 +121,38 @@ export default function createQ(context: EggContext): Egg {
     const size = 200 * Math.max(0.4, unit);
     pieces.zero.size = size;
     pieces.one.size = size;
+    pieces.text.size = size;
 
+    // `q_platlogo_layout`: the pieces (200dp) hang below the 400dp logotype,
+    // whose layout box reaches 80dp into them (marginBottom -80dp) — putting
+    // their centres 0.82 * size below the translated text centre — with "1"
+    // aligned to the text's left edge + 24dp and "0" to its right edge - 34dp.
     const cx = width / 2;
     const textY = height / 2 - 100 * unit;
-    const rowY = textY + size * 0.62;
-    pieces.zero.x = cx + size * 0.28;
+    const rowY = textY + size * 0.82;
+    pieces.zero.x = cx + size * 0.33;
     pieces.zero.y = rowY;
-    pieces.one.x = cx - size * 0.62;
+    pieces.one.x = cx - size * 0.38;
     pieces.one.y = rowY;
+    pieces.text.x = cx;
+    pieces.text.y = textY;
   };
 
   layout();
   const offResize = context.onResize(layout);
 
   const newPuzzle = (): void => {
-    const icon = context.pick(ICONS);
-    const data = quantize(icon);
-    let sum = 0;
-    for (const cell of data) sum += cell;
-    if (sum === 0) {
-      newPuzzle();
-      return;
+    // `QuaresActivity.newPuzzle`: up to 4 tries, avoiding both a blank puzzle
+    // (`isBlank`) and an immediate repeat of the previous one.
+    const previous = puzzle?.icon;
+    let icon = context.pick(ICONS);
+    let data = quantize(icon);
+    for (let tries = 0; tries < 3; tries++) {
+      let sum = 0;
+      for (const cell of data) sum += cell;
+      if (sum !== 0 && icon !== previous) break;
+      icon = context.pick(ICONS);
+      data = quantize(icon);
     }
     puzzle = { icon, data, user: new Uint8Array(GRID * GRID) };
     victoryAt = -1;
@@ -133,9 +169,24 @@ export default function createQ(context: EggContext): Egg {
       Math.hypot(targetX - one.x, targetY - one.y) < w * SNAP_DISTANCE &&
       Math.abs(rotation - 315) < SNAP_TOLERANCE_DEG
     ) {
-      one.x = targetX;
-      one.y = targetY;
-      one.rotation = 315;
+      // `testOverlap`: the piece GLIDES to the dock over the ViewPropertyAnimator
+      // default 300 ms — x/y to the target and rotation from `rotation % 360`
+      // (applied immediately) to 315.
+      const fromX = one.x;
+      const fromY = one.y;
+      one.rotation = rotation;
+      tweens.add(
+        {
+          duration: DOCK_MS,
+          ease: ACCEL_DECEL,
+          onUpdate: (v) => {
+            one.x = fromX + (targetX - fromX) * v;
+            one.y = fromY + (targetY - fromY) * v;
+            one.rotation = rotation + (315 - rotation) * v;
+          },
+        },
+        frameNow,
+      );
       navigator.vibrate?.(20);
       backslashRunning = true;
       clicks++;
@@ -153,18 +204,27 @@ export default function createQ(context: EggContext): Egg {
   };
 
   const spin = (piece: Piece): void => {
+    // `OffsetRotationAnimatorTouchListener` / `tl`: ObjectAnimator ROTATION
+    // from the current value to +3600 (the "1" listener adds its 315 offset),
+    // 10 s on the default AccelerateDecelerateInterpolator — and cancelled on
+    // every ACTION_UP, so the spin only advances while the piece is held.
+    spinTweens.get(piece)?.cancel();
     const from = piece.rotation;
     const to = from + 3600 + (piece.id === 'one' ? 315 : 0);
-    tweens.add(
-      {
-        duration: SPIN_MS,
-        from,
-        to,
-        onUpdate: (v) => {
-          piece.rotation = v;
+    spinTweens.set(
+      piece,
+      tweens.add(
+        {
+          duration: SPIN_MS,
+          ease: ACCEL_DECEL,
+          from,
+          to,
+          onUpdate: (v) => {
+            piece.rotation = v;
+          },
         },
-      },
-      performance.now(),
+        frameNow,
+      ),
     );
   };
 
@@ -173,12 +233,18 @@ export default function createQ(context: EggContext): Egg {
       const half = (piece.size / 2) * piece.scale;
       if (Math.abs(x - piece.x) <= half && Math.abs(y - piece.y) <= half) return piece;
     }
+    // The logotype view: 400dp wide, adjustViewBounds -> 400 * 64/290 high.
+    const text = pieces.text;
+    const ts = (text.size / 200) * text.scale;
+    if (Math.abs(x - text.x) <= 200 * ts && Math.abs(y - text.y) <= 44.14 * ts) return text;
     return null;
   };
 
   const offDown = context.onPointerDown((x, y) => {
     if (scene === 'quares') {
-      toggleCell(x, y);
+      // The PixelButton is a CompoundButton: it shows `q_red` while pressed
+      // and only toggles when the click completes on release.
+      pressedCell = cellIndexAt(x, y);
       return;
     }
     const piece = pieceAt(x, y);
@@ -187,6 +253,7 @@ export default function createQ(context: EggContext): Egg {
     grabDx = x - piece.x;
     grabDy = y - piece.y;
     piece.scale = 1.1;
+    topPiece = piece.id;
 
     const now = performance.now();
     if (lastTapPiece === piece && now - lastTapAt < DOUBLE_TAP_MS) {
@@ -199,10 +266,26 @@ export default function createQ(context: EggContext): Egg {
     }
   });
 
-  const offUp = context.onPointerUp(() => {
+  const offUp = context.onPointerUp((x, y) => {
+    if (scene === 'quares') {
+      const released = cellIndexAt(x, y);
+      if (pressedCell >= 0 && released === pressedCell) toggleCell(pressedCell);
+      pressedCell = -1;
+      if (victoryButton !== null) {
+        const { x: bx, y: by, w, h } = victoryButton;
+        if (x >= bx && x <= bx + w && y >= by && y <= by + h) newPuzzle();
+      }
+      return;
+    }
     if (dragging === null) return;
     dragging.scale = 1;
-    if (dragging.id === 'one') testOverlap();
+    // ACTION_UP cancels the rotation animator: releasing freezes the spin.
+    spinTweens.get(dragging)?.cancel();
+    spinTweens.delete(dragging);
+    // Every listener (both the "1" one and the shared zero/text `tl`) runs
+    // testOverlap on release — dragging the "0" away therefore also stops the
+    // backslash backdrop and can even re-dock the "1".
+    testOverlap();
     dragging = null;
   });
 
@@ -218,14 +301,17 @@ export default function createQ(context: EggContext): Egg {
     return { clue, cell, originX, originY };
   };
 
-  const toggleCell = (x: number, y: number): void => {
-    if (puzzle === null || victoryAt >= 0) return;
+  const cellIndexAt = (x: number, y: number): number => {
     const { cell, originX, originY } = cellMetrics();
     const col = Math.floor((x - originX) / cell);
     const row = Math.floor((y - originY) / cell);
-    if (col < 0 || row < 0 || col >= GRID || row >= GRID) return;
+    if (col < 0 || row < 0 || col >= GRID || row >= GRID) return -1;
+    return row * GRID + col;
+  };
 
-    const i = row * GRID + col;
+  const toggleCell = (i: number): void => {
+    if (puzzle === null || victoryAt >= 0) return;
+
     puzzle.user[i] = puzzle.user[i] === 1 ? 0 : 1;
 
     let solved = true;
@@ -236,7 +322,7 @@ export default function createQ(context: EggContext): Egg {
       }
     }
     if (solved) {
-      victoryAt = performance.now();
+      victoryAt = frameNow;
       navigator.vibrate?.([0, 30, 40, 30]);
       context.toast(`解出来了：${puzzle.icon.name}`, 3);
     }
@@ -244,6 +330,7 @@ export default function createQ(context: EggContext): Egg {
 
   const offFrame = context.onFrame((dt, t) => {
     const now = t * 1000;
+    frameNow = now;
     tweens.update(now);
     const { ctx, width, height } = context;
 
@@ -270,17 +357,17 @@ export default function createQ(context: EggContext): Egg {
       ctx.restore();
     }
 
-    const unit = Math.min(width, height) / 720;
-    ctx.save();
-    ctx.fillStyle = Q_NAVY;
-    ctx.font = `500 ${Math.max(24, 400 * unit * 0.28)}px system-ui, "Helvetica Neue", Arial, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Android', width / 2, height / 2 - 100 * unit);
-    ctx.restore();
-
-    drawZero(pieces.zero);
-    drawOne(pieces.one);
+    // `bringChildToFront(v)` on touch: the last grabbed piece draws on top,
+    // the others keep the XML order (text, one, zero).
+    const drawPiece = (piece: Piece): void => {
+      if (piece.id === 'text') drawText(piece);
+      else if (piece.id === 'one') drawOne(piece);
+      else drawZero(piece);
+    };
+    for (const piece of [pieces.text, pieces.one, pieces.zero]) {
+      if (piece.id !== topPiece) drawPiece(piece);
+    }
+    drawPiece(pieces[topPiece]);
 
     ctx.save();
     ctx.fillStyle = 'rgba(7, 48, 66, 0.7)';
@@ -316,6 +403,21 @@ export default function createQ(context: EggContext): Egg {
       context.ctx.arc(12, 12, 10, 0, Math.PI * 2);
       context.ctx.stroke();
     });
+  }
+
+  function drawText(piece: Piece): void {
+    const ctx = context.ctx;
+    const s = piece.size / 200;
+    ctx.save();
+    ctx.translate(piece.x, piece.y);
+    ctx.rotate((piece.rotation * Math.PI) / 180);
+    ctx.scale(piece.scale, piece.scale);
+    ctx.fillStyle = Q_NAVY;
+    ctx.font = `500 ${Math.max(24, 400 * s * 0.28)}px system-ui, "Helvetica Neue", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Android', 0, 0);
+    ctx.restore();
   }
 
   function drawOne(piece: Piece): void {
@@ -376,14 +478,11 @@ export default function createQ(context: EggContext): Egg {
       for (let col = 0; col < GRID; col++) {
         const x = originX + col * cell;
         const y = originY + row * cell;
-        const on = current.user[row * GRID + col] === 1;
-        ctx.fillStyle = on ? '#FFFFFF' : '#0d1b26';
+        const i = row * GRID + col;
+        // `q_pixel_bg` selector: pressed -> q_red, checked -> q_pixel_on
+        // (black), default -> q_pixel_off (white).
+        ctx.fillStyle = i === pressedCell ? Q_RED : current.user[i] === 1 ? PIXEL_ON : PIXEL_OFF;
         ctx.fillRect(x, y, cell - 1, cell - 1);
-        if (!on) {
-          ctx.strokeStyle = 'rgba(239, 247, 207, 0.18)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(x + 0.5, y + 0.5, cell - 2, cell - 2);
-        }
       }
     }
 
@@ -409,12 +508,6 @@ export default function createQ(context: EggContext): Egg {
     }
   }
 
-  const offDown2 = context.onPointerDown((x, y) => {
-    if (scene !== 'quares' || victoryButton === null) return;
-    const { x: bx, y: by, w, h } = victoryButton;
-    if (x >= bx && x <= bx + w && y >= by && y <= by + h) newPuzzle();
-  });
-
   context.actions.add({
     id: 'quares',
     label: '打开 Icon Quiz',
@@ -434,7 +527,6 @@ export default function createQ(context: EggContext): Egg {
     hint: '双击 “1” 旋转，拖到 “0” 右下方拼成 Q；凑满 7 次进入数织',
     destroy() {
       offDown();
-      offDown2();
       offUp();
       offFrame();
       offResize();

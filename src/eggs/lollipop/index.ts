@@ -9,14 +9,14 @@ import { drawLollipopPop, LOLLIPOP_POPS, SPINNY_POPS } from '../shared/flappyArt
  *
  * PlatLogo: a lollipop on a stick. It grows to 0.3x at +800 ms; the first tap
  * runs the reveal (candy 0.3 -> 1 at +500 ms over 700 ms, stick fading in at
- * +750 ms over 700 ms, the "lollipop" wordmark at +1000 ms over 300 ms) and
+ * +750 ms over 700 ms, the `l_platlogo` wordmark at +1000 ms over 300 ms) and
  * every later tap re-rolls one of the six FLAVOURS pairs. Five taps arm the
  * long press that opens LLand.
  *
  * LLand: hold anywhere (or Space / ArrowUp) to rise at a constant 550 dp/s,
  * release to fall under `dv += 30` per 1/60 s step. Seven candy arts on 90 dp
  * pops, 170 dp gap, 3 s cadence, 100 dp/s scroll, four skies, 50 % mirrored
- * world, 20 parallax scenery items.
+ * world, 20 parallax scenery items, one solid green droid.
  */
 
 const FLAVORS: ReadonlyArray<readonly [string, string]> = [
@@ -27,6 +27,34 @@ const FLAVORS: ReadonlyArray<readonly [string, string]> = [
   ['#FFEB3B', '#FFF176'],
   ['#795548', '#A1887F'],
 ];
+
+/**
+ * `l_platlogo.xml`, the lowercase "lollipop" wordmark in its 560 unit viewport.
+ * The `o` and `p` counters are separate counter-wound subpaths of the same
+ * element, so the default non-zero fill leaves them open.
+ */
+const WORDMARK = new Path2D(
+  // l
+  'M65.4,221.0l11.17,0.0l0.0,98.27l-11.17,0.0z' +
+    // o
+    'M169.490005,279.880005c0.0,22.639999 -18.32,41.12 -40.810,41.12c-22.639999,0.0 -41.040,-18.48 -41.040,-41.12c0.0,-22.48 18.389999,-40.880 41.040,-40.880C151.169998,239.0 169.490005,257.399994 169.490005,279.880005z' +
+    'M158.089996,280.040009c0.0,-16.43 -13.13,-29.870 -29.41,-29.870c-16.51,0.0 -29.4,13.44 -29.4,29.870c0.0,16.280 12.89,29.799999 29.4,29.799999C144.960007,309.8387 158.089996,296.309998 158.089996,280.040009z' +
+    // l, l
+    'M180.58,221.0l11.17,0.0l0.0,98.27l-11.17,0.0z' +
+    'M204.8,221.0l11.17,0.0l0.0,98.27l-11.17,0.0z' +
+    // i
+    'M229.02,221.0l11.17,0.0l0.0,11.48l-11.17,0.0z' +
+    'M229.02,240.65l11.17,0.0l0.0,78.62l-11.17,0.0z' +
+    // p
+    'M264.079987,240.736l0.0,9.82c7.31,-7.15 17.139999,-11.56 28.07,-11.56c22.639999,0.0 40.799999,18.48 40.799999,41.12c0.0,22.48 -18.16,40.880 -40.799999,40.880c-10.93,0.0 -20.280,-4.09 -27.59,-10.93L264.559998,339.0l-11.32,0.0l0.0,-98.269997L264.079987,240.731z' +
+    'M265.809998,264.869995c-0.47,0.79 -1.26,2.04 -1.26,4.79l0.0,21.07c0.0,1.97 0.47,3.07 1.1,4.17c5.19,8.88 14.78,14.94 25.63,14.94c16.43,0.0 29.950,-13.44 29.950,-29.870c0.0,-16.280 -13.52,-29.799999 -29.950,-29.799999C280.51,250.169998 271.0,256.059998 265.809998,264.869995z' +
+    // o
+    'M423.790009,279.880005c0.0,22.639999 -18.32,41.12 -40.810,41.12c-22.639999,0.0 -41.040,-18.48 -41.040,-41.12c0.0,-22.48 18.389999,-40.880 41.040,-40.880C405.470,239.0 423.790009,257.399994 423.790009,279.880005z' +
+    'M412.395,280.040009c0.0,-16.43 -13.13,-29.870 -29.41,-29.870c-16.51,0.0 -29.4,13.44 -29.4,29.870c0.0,16.280 12.89,29.799999 29.4,29.799999C399.26,309.8387 412.395,296.309998 412.395,280.040009z' +
+    // p
+    'M445.731,240.736l0.0,9.82c7.31,-7.15 17.139999,-11.56 28.07,-11.56c22.639999,0.0 40.799999,18.48 40.799999,41.12c0.0,22.48 -18.16,40.880 -40.799999,40.880c-10.93,0.0 -20.280,-4.09 -27.59,-10.93L446.210052,339.0l-11.32,0.0l0.0,-98.269997L445.731,240.731z' +
+    'M447.459991,264.869995c-0.47,0.79 -1.26,2.04 -1.26,4.79l0.0,21.07c0.0,1.97 0.47,3.07 1.1,4.17c5.19,8.88 14.78,14.94 25.63,14.94c16.43,0.0 29.950,-13.44 29.950,-29.870c0.0,-16.280 -13.52,-29.799999 -29.950,-29.799999C462.160004,250.169998 452.649994,256.059998 447.459991,264.869995z',
+);
 
 const LONG_PRESS_MS = 500;
 const TAPS_TO_ARM = 5;
@@ -39,22 +67,42 @@ const LLAND_CONFIG: FlappyConfig = {
   obstacleMin: 40,
   buildingWidthMin: 20,
   popHitFraction: 0.5,
-  hudRadius: 8,
-  hudTextSize: 32,
+  hud: {
+    radius: 8,
+    textSize: 32,
+    bold: false,
+    padX: 16,
+    centered: false,
+    top: 32,
+    left: 16,
+    chipHeight: 54,
+    gap: 0,
+  },
   maxPlayers: 1,
   scenes: ['city'],
+  // LLand.java:717 tints the single droid solid green.
+  playerColors: ['#00FF00'],
   stemColors: ['#FFFFFF', '#AAAAAA'],
   candyCaneStemChance: 0,
+  // LLand.java:913-914: OBSTACLE_WIDTH/2 deep, painted in solid #FFAAAAAA.
+  stemShadowDepth: 0.5,
+  stemShadowColor: '#AAAAAA',
   scoreByPipeId: false,
   showTouches: false,
   splash: false,
   vibrateOnDeath: false,
   weightedSky: false,
+  startYJitter: false,
+  // `l_scenery_z` = 6dp: buildings are raised by SCENERY_Z * (1 + z).
+  sceneryZ: 6,
   makePop: (random): PopVisual => {
     const art = LOLLIPOP_POPS[Math.floor(random() * LOLLIPOP_POPS.length)];
     return {
+      // `mRotate = spinny ? (frand() < 0.5 ? -1 : 1) : 0`, stepped at 45 deg/s.
       spin: SPINNY_POPS.has(art) ? (random() < 0.5 ? -45 : 45) : 0,
-      mirrorX: random() < 0.5,
+      // `Pop`'s constructor does `setScaleX(frand() < 0.5 ? -1 : 1)`, but the
+      // spawn code immediately overwrites it with setScaleX(0.25f) and animates
+      // to 1f, so upstream pops are never actually mirrored.
       mirrorY: false,
       render: (ctx, size) => drawLollipopPop(ctx, size, art),
     };
@@ -72,7 +120,7 @@ type Scene = 'platlogo' | 'lland';
 export default function createLollipop(context: EggContext): Egg {
   const tweens = new Tweens();
   let scene: Scene = 'platlogo';
-  let flavorIndex = Math.floor(context.random() * FLAVORS.length) * 2 % FLAVORS.length;
+  let flavorIndex = 0;
   let candyScale = 0;
   let stickAlpha = 0;
   let wordAlpha = 0;
@@ -85,10 +133,8 @@ export default function createLollipop(context: EggContext): Egg {
 
   let game: FlappyGame | null = null;
 
-  const newFlavor = (): number => {
-    const pairs = FLAVORS.length;
-    return Math.floor(context.random() * pairs);
-  };
+  /** `newColorIndex()` picks one of the six [fill, ripple] pairs at random. */
+  const newFlavor = (): number => Math.floor(context.random() * FLAVORS.length);
 
   flavorIndex = newFlavor();
 
@@ -122,10 +168,9 @@ export default function createLollipop(context: EggContext): Egg {
         get height() {
           return context.height;
         },
+        ctx: context.ctx,
         random: () => context.random(),
         randomInt: (min, max) => context.randomInt(min, max),
-        pick: (items) => context.pick(items),
-        toast: (message, seconds) => context.toast(message, seconds),
       },
       LLAND_CONFIG,
     );
@@ -139,12 +184,16 @@ export default function createLollipop(context: EggContext): Egg {
       const gameRef = game;
       if (gameRef !== null) {
         const held = HOLD_KEYS.some((code) => context.keys.has(code));
-        if (held && !wasKey) gameRef.poke(0, context.pointer.x, context.pointer.y);
+        if (held && !wasKey) gameRef.pokeKey(0);
         if (!held && wasKey) gameRef.unpoke(0);
         wasKey = held;
 
-        if (context.pointer.down && !wasDown) gameRef.poke(0, context.pointer.x, context.pointer.y);
-        if (!context.pointer.down && wasDown) gameRef.unpoke(0);
+        // LLand only handles ACTION_DOWN/ACTION_UP, so any number of fingers on
+        // the single primary pointer reads as one hold.
+        if (context.pointer.justPressed) {
+          gameRef.poke(0, context.pointer.x, context.pointer.y);
+        }
+        if (wasDown && !context.pointer.down) gameRef.unpoke(0);
         wasDown = context.pointer.down;
 
         gameRef.update(dt);
@@ -196,7 +245,10 @@ export default function createLollipop(context: EggContext): Egg {
     ctx.fillStyle = '#12141a';
     ctx.fillRect(0, 0, width, height);
 
-    const size = Math.max(40, Math.min(Math.min(width, height), 600) - 100) * candyScale;
+    // `size = min(min(w, h), 600dp) - 100dp`; the stick's shadow is cast by the
+    // full-size candy, so it does not grow with the reveal.
+    const fullSize = Math.max(40, Math.min(Math.min(width, height), 600) - 100);
+    const size = fullSize * candyScale;
     const cx = width / 2;
     const cy = height / 2;
     const stickW = 32;
@@ -215,8 +267,8 @@ export default function createLollipop(context: EggContext): Egg {
       ctx.beginPath();
       ctx.moveTo(cx - stickW / 2, cy);
       ctx.lineTo(cx + stickW / 2, cy);
-      ctx.lineTo(cx + stickW / 2, cy + size / 2 + stickW * 1.5);
-      ctx.lineTo(cx - stickW / 2, cy + size / 2);
+      ctx.lineTo(cx + stickW / 2, cy + fullSize / 2 + stickW * 1.5);
+      ctx.lineTo(cx - stickW / 2, cy + fullSize / 2);
       ctx.closePath();
       ctx.fill();
       ctx.restore();
@@ -254,15 +306,15 @@ export default function createLollipop(context: EggContext): Egg {
       if (wordAlpha > 0.001) {
         ctx.save();
         ctx.globalAlpha = wordAlpha;
+        ctx.scale(size / 560, size / 560);
+        ctx.translate(-280, -280);
         ctx.fillStyle = '#FFFFFF';
-        ctx.font = `600 ${size * 0.19}px system-ui, "Helvetica Neue", Arial, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('lollipop', 0, size * 0.02);
+        ctx.fill(WORDMARK);
         ctx.restore();
       }
 
-      // The 0x10FFFFFF specular overlay from (0.15, 0.15) to (0.6, 0.6).
+      // The 0x10FFFFFF specular overlay from (0.15, 0.15) to (0.6, 0.6), drawn
+      // above the wordmark because it lives in the ImageView's overlay.
       ctx.fillStyle = 'rgba(255, 255, 255, 0.063)';
       ctx.beginPath();
       ctx.ellipse(

@@ -4,7 +4,14 @@ import type { Egg, EggContext } from '../../core/types';
  * Android 3.0 – 3.2 Honeycomb — the Tron-styled neon bee with an Android head.
  * Upstream picks one of two colourways at random per launch and toasts
  * "REZZZZZZZ..." on every ACTION_UP. Geometry is the 640 x 640 reference frame
- * measured from the original artwork.
+ * measured from `h_platlogo` (content bbox (6, 88) - (634, 602)).
+ *
+ * `h_platlogo_1` (the yellow "bumblebee", a repo addition with no AOSP
+ * counterpart) shares the skeleton but is drawn slightly larger: head dome
+ * y 88-180 instead of 128-232, wings spanning x 2-637, abdomen bands at
+ * y 194-236 / 293-331 / 384-435. Only the colours are switched here, because
+ * the upstream measurements for that variant do not cover its eyes, lower wings
+ * or abdomen width; inventing them would be worse than the shared outline.
  */
 
 const REF = 640;

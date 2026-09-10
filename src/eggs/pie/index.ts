@@ -9,8 +9,11 @@ import { PaintApp } from './paint';
  * while `offset` advances once per minute, over a constant-colour centre disc and
  * the stroked "P" glyph (a dark outline of width 1.334r under a white core of
  * 0.667r). Every single-finger tap re-rolls the palette; the seventh opens
- * PAINT.APK. Upstream also pinch-resizes the logo, which becomes wheel/drag
- * resizing here since the web host tracks one pointer.
+ * PAINT.APK.
+ *
+ * Like upstream, a two-finger pinch resizes the logo (`bg.setRadius(hypot(p0,
+ * p1) / 2)`, clamped to 48dp) and any multi-touch gesture resets the tap
+ * count; the wheel is kept as a mouse-only fallback.
  *
  * PAINT.APK is in `./paint`.
  */
@@ -70,6 +73,9 @@ export default function createPie(context: EggContext): Egg {
   let radius = Math.max(MIN_RADIUS, context.width / 6);
   let taps = 0;
   let paint: PaintApp | null = null;
+  /** True once a gesture has seen more than one pointer (`maxPointers > 1`). */
+  let pinched = false;
+  let gestureActive = false;
 
   const onWheel = (event: WheelEvent) => {
     if (scene !== 'platlogo') return;
@@ -78,19 +84,13 @@ export default function createPie(context: EggContext): Egg {
   };
   context.canvas.addEventListener('wheel', onWheel, { passive: false });
 
-  const offUp = context.onPointerUp(() => {
-    if (scene !== 'platlogo') return;
-    taps++;
-    if (taps < TAPS_TO_UNLOCK) {
-      palette = randomizePalette(context.random);
-      return;
-    }
+  const launchPaint = (): void => {
     if (context.store.get<number>('p_egg_mode', 0) === 0) {
       context.store.set('p_egg_mode', Date.now());
     }
     scene = 'paint';
     paint = new PaintApp(context);
-  });
+  };
 
   const offFrame = context.onFrame((_dt, t) => {
     const { ctx, width, height } = context;
@@ -102,6 +102,33 @@ export default function createPie(context: EggContext): Egg {
       ctx.clearRect(0, 0, width, height);
       app.render(ctx);
       return;
+    }
+
+    // `PlatLogoActivity` touch handling: every DOWN/MOVE with two pointers
+    // sets the radius to half their distance; on the final UP a single-pointer
+    // gesture counts as a tap (seventh launches PAINT.APK) while any
+    // multi-touch gesture resets the count instead.
+    const down = context.pointers.filter((p) => p.down);
+    if (down.length >= 2) {
+      pinched = true;
+      const [a, b] = down;
+      radius = Math.max(MIN_RADIUS, Math.hypot(a.x - b.x, a.y - b.y) / 2);
+    }
+    if (down.length > 0) {
+      gestureActive = true;
+    } else if (gestureActive) {
+      gestureActive = false;
+      if (pinched) {
+        pinched = false;
+        taps = 0;
+      } else {
+        taps++;
+        if (taps >= TAPS_TO_UNLOCK) {
+          launchPaint();
+          return;
+        }
+        palette = randomizePalette(context.random);
+      }
     }
 
     const offset = (t * 1000) / 60000;
@@ -151,16 +178,14 @@ export default function createPie(context: EggContext): Egg {
     label: '打开 PAINT.APK',
     run: () => {
       if (scene === 'paint') return;
-      scene = 'paint';
-      paint = new PaintApp(context);
+      launchPaint();
     },
   });
 
   return {
-    hint: '连点 7 次换配色并进入 PAINT.APK；滚轮缩放 logo',
+    hint: '连点 7 次换配色并进入 PAINT.APK；双指捏合（或滚轮）缩放 logo',
     destroy() {
       context.canvas.removeEventListener('wheel', onWheel);
-      offUp();
       offFrame();
       paint?.destroy();
       paint = null;

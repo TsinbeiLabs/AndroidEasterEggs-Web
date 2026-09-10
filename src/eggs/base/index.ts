@@ -1,25 +1,44 @@
-import { drawDroid } from '../../core/art';
 import { PLATLOGO_EASE } from '../../core/easing';
 import { Tweens } from '../../core/tween';
 import type { Egg, EggContext, EggFactory } from '../../core/types';
+import { drawVectorArt } from '../shared/vectorArt';
+import type { VectorArt } from '../shared/vectorArtTypes';
 
 /**
  * Android 1.0 - 2.2 (Base, Petit Four, Cupcake, Donut, Eclair, Froyo).
  *
  * Upstream serves all six from one Compose `PlatLogoActivity`: a centred logo at
- * `min(width, height) * 0.6` that toasts "Android <version>: <nickname>" on tap.
- * The AOSP art for these versions is a raster logo, so each is drawn here as the
- * bugdroid in a version-specific accent with the dessert name underneath.
+ * `min(width, height) * 0.6` (`PlatLogoActivity.kt:124-126`) that toasts
+ * "Android <version>: <nickname>" on tap, and nothing else — no long press, no
+ * animation, no secondary screen.
+ *
+ * Each variant's `iconRes` is a hand-drawn vector in `res/drawable-anydpi`, and the
+ * port draws exactly those: `b_android_classic` (shared by Base and Petit Four) is
+ * the `#a6c44b` bugdroid, while `_cupcake` / `_donut` / `_eclair` / `_froyo` are
+ * multi-tone dessert illustrations (Donut's five `<aapt:attr>` gradients included).
+ * The art module is imported lazily so its ~78 KB of path data stays out of the
+ * shell bundle. The nickname and version captions underneath are a port addition;
+ * upstream shows them only in the tap toast.
  */
+
+export type BaseArtName =
+  | 'baseClassic'
+  | 'baseCupcake'
+  | 'baseDonut'
+  | 'baseEclair'
+  | 'baseFroyo';
 
 interface Variant {
   version: string;
   nickname: string;
-  accent: string;
+  /** Which `b_android_*` drawable this variant's `iconRes` points at. */
+  art: BaseArtName;
 }
 
 export function createBaseEgg(variant: Variant): EggFactory {
-  return (context: EggContext): Egg => {
+  return async (context: EggContext): Promise<Egg> => {
+    const art: VectorArt = (await import('../shared/baseArt'))[variant.art];
+
     const tweens = new Tweens();
     let scale = 0.6;
     let alpha = 0;
@@ -29,9 +48,15 @@ export function createBaseEgg(variant: Variant): EggFactory {
       const now = t * 1000;
       tweens.update(now);
       const { ctx, width, height, pointer } = context;
+      const size = Math.min(width, height) * 0.6 * scale;
 
+      // `PlatLogoActivity.kt:128-138` hangs `clickable` off the `Image`, whose box is a
+      // centred square of `minOf(maxWidth, maxHeight) * 0.6f`; taps outside it do nothing.
       if (pointer.down && !wasDown) {
-        context.toast(`Android ${variant.version}: ${variant.nickname}`, 2);
+        const half = size / 2;
+        if (Math.abs(pointer.x - width / 2) <= half && Math.abs(pointer.y - height / 2) <= half) {
+          context.toast(`Android ${variant.version}: ${variant.nickname}`, 2);
+        }
       }
       wasDown = pointer.down;
 
@@ -41,16 +66,16 @@ export function createBaseEgg(variant: Variant): EggFactory {
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
 
-      const size = Math.min(width, height) * 0.6 * scale;
       ctx.save();
       ctx.globalAlpha = alpha;
-      drawDroid(ctx, {
-        x: width / 2,
-        y: height / 2 - size * 0.16,
-        unit: size * 0.16,
-        bodyColor: variant.accent,
-        eyeColor: '#101418',
-      });
+
+      // The upstream `Image` box is the centred `0.6 * minSide` square; the art is
+      // fitted inside it and lifted a little to leave room for the captions.
+      ctx.save();
+      const artSize = size * 0.84;
+      ctx.translate(width / 2 - artSize / 2, height / 2 - size * 0.18 - artSize / 2);
+      drawVectorArt(ctx, art, artSize);
+      ctx.restore();
 
       ctx.fillStyle = '#FFFFFF';
       ctx.font = `600 ${Math.max(16, size * 0.09)}px system-ui, sans-serif`;
@@ -74,7 +99,7 @@ export function createBaseEgg(variant: Variant): EggFactory {
     );
 
     return {
-      hint: '点击任意位置',
+      hint: '点击 logo 区域',
       destroy() {
         offFrame();
         tweens.cancelAll();

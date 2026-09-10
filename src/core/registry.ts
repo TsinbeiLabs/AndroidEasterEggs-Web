@@ -1,8 +1,8 @@
 import type { EggMeta } from './types';
-import { createBaseEgg } from '../eggs/base';
+import { createBaseEgg, type BaseArtName } from '../eggs/base';
 
-const baseEgg = (version: string, nickname: string, accent: string) => async () => ({
-  default: createBaseEgg({ version, nickname, accent }),
+const baseEgg = (version: string, nickname: string, art: BaseArtName) => async () => ({
+  default: createBaseEgg({ version, nickname, art }),
 });
 
 /**
@@ -19,7 +19,7 @@ export const EGGS: readonly EggMeta[] = [
     codename: 'Base',
     title: 'PlatLogo',
     status: 'ready',
-    load: baseEgg('1.0', 'Base', '#9E9E9E'),
+    load: baseEgg('1.0', 'Base', 'baseClassic'),
   },
   {
     id: 'petit-four',
@@ -28,7 +28,7 @@ export const EGGS: readonly EggMeta[] = [
     codename: 'Petit Four',
     title: 'PlatLogo',
     status: 'ready',
-    load: baseEgg('1.1', 'Petit Four', '#B39DDB'),
+    load: baseEgg('1.1', 'Petit Four', 'baseClassic'),
   },
   {
     id: 'cupcake',
@@ -37,7 +37,7 @@ export const EGGS: readonly EggMeta[] = [
     codename: 'Cupcake',
     title: 'PlatLogo',
     status: 'ready',
-    load: baseEgg('1.5', 'Cupcake', '#F48FB1'),
+    load: baseEgg('1.5', 'Cupcake', 'baseCupcake'),
   },
   {
     id: 'donut',
@@ -46,7 +46,7 @@ export const EGGS: readonly EggMeta[] = [
     codename: 'Donut',
     title: 'PlatLogo',
     status: 'ready',
-    load: baseEgg('1.6', 'Donut', '#FFCC80'),
+    load: baseEgg('1.6', 'Donut', 'baseDonut'),
   },
   {
     id: 'eclair',
@@ -55,7 +55,7 @@ export const EGGS: readonly EggMeta[] = [
     codename: 'Eclair',
     title: 'PlatLogo',
     status: 'ready',
-    load: baseEgg('2.0', 'Eclair', '#90CAF9'),
+    load: baseEgg('2.0', 'Eclair', 'baseEclair'),
   },
   {
     id: 'froyo',
@@ -64,7 +64,7 @@ export const EGGS: readonly EggMeta[] = [
     codename: 'Froyo',
     title: 'PlatLogo',
     status: 'ready',
-    load: baseEgg('2.2', 'Froyo', '#A5D6A7'),
+    load: baseEgg('2.2', 'Froyo', 'baseFroyo'),
   },
   {
     id: 'gingerbread',
@@ -249,9 +249,10 @@ export const EGGS: readonly EggMeta[] = [
   {
     id: 'rocket-launcher',
     api: 10001,
-    version: '2.x',
+    version: '4.0',
     codename: 'RocketLauncher',
-    title: 'launcher2 Home',
+    // `rocket_launcher_dream_name`; the module is the ICS launcher's warp screensaver.
+    title: 'Rocket Launcher',
     status: 'ready',
     load: () => import('../eggs/rocketlauncher'),
   },

@@ -66,19 +66,22 @@ export default function createNougat(context: EggContext): Egg {
     if (!context.pointer.down && wasDown) {
       const held = downAt < 0 ? 0 : now - downAt;
       downAt = -1;
-      if (held >= LONG_PRESS_MS) {
-        if (taps >= TAPS_TO_ARM) {
-          wasDown = context.pointer.down;
-          enterNeko();
-          return;
-        }
-      } else {
-        taps++;
+      if (held >= LONG_PRESS_MS && taps >= TAPS_TO_ARM) {
+        wasDown = context.pointer.down;
+        enterNeko();
+        return;
       }
+      // Every other release counts as a click — upstream a long press with
+      // fewer than 5 taps returns false from `onLongClick`, and the click
+      // still fires (and ripples) on release.
+      taps++;
     }
     wasDown = context.pointer.down;
 
-    const size = Math.max(40, Math.min(Math.min(width, height), 600) - 100) * scale;
+    // `PlatLogoActivity`: the view is min(min(w, h), 600dp) - 100dp with a 40dp
+    // padding on every side, so the drawable itself is 180 units smaller than
+    // the min side cap.
+    const size = Math.max(40, Math.min(Math.min(width, height), 600) - 180) * scale;
     const cx = width / 2;
     const cy = height / 2;
     const k = size / 48;

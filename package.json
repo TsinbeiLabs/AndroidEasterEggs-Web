@@ -8,10 +8,14 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "gen:art": "node tools/extract-vectordrawable.mjs <name=/> ... <out.ts>",
+    "gen:assets": "node tools/extract-landroid-assets.mjs <path-to>/eggs/CinnamonBun/src/main/java/com/android_cinnamon_bun/egg/landroid/Assets.kt src/eggs/shared/landroidAssets.ts"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
   }
 }

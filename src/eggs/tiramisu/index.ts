@@ -8,8 +8,10 @@ import { mountPaintChips, type PaintChipsHandle } from '../shared/paintchips';
  *
  * Same clock PlatLogo as Snow Cone with three differences: it unlocks at 13:00
  * instead of 12:00, the logo is the accent1 "13" flower, and a long press on the
- * bubble field swaps every bubble for an emoji drawn from one of the 14 upstream
- * sets (fruits, cats, hearts, moon phases, zodiac, clock faces, ...).
+ * grown bubble field swaps every bubble for an emoji drawn from one of the 14
+ * upstream sets (fruits, cats, hearts, moon phases, zodiac, clock faces, ...).
+ * Like upstream the screen stays open after the unlock and only `t_egg_mode` is
+ * written; the secondary screens are reached through the action buttons.
  */
 
 type Scene = 'clock' | 'chips' | 'neko';
@@ -45,15 +47,12 @@ export default function createTiramisu(context: EggContext): Egg {
   clock = new PlatLogoClock(context, {
     unlockHour: 1,
     logo: 'thirteen',
-    discColor: '#7FC8FF',
     emojiBubbles: true,
     onUnlock: () => {
+      // SpUtils.putLong(this, "t_egg_mode", System.currentTimeMillis())
       if (context.store.get<number>('t_egg_mode', 0) === 0) {
         context.store.set('t_egg_mode', Date.now());
       }
-      clock?.destroy();
-      clock = null;
-      showChips();
     },
   });
 

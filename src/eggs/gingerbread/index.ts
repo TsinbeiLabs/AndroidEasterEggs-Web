@@ -51,7 +51,11 @@ function drawSky(ctx: CanvasRenderingContext2D): void {
   const gradient = ctx.createLinearGradient(0, 0, 0, REF_H * 0.62);
   for (const [stop, color] of SKY_STOPS) gradient.addColorStop(stop, color);
   ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, REF_W, REF_H * 0.62);
+  // The gradient stops at the horizon (REF_H * 0.62 = 297.6) but the ground curve
+  // dips to y = 336 at the right edge, so the rect has to reach the bottom of the
+  // frame or an unpainted band of backdrop shows through between the two. The
+  // last stop just repeats below the horizon, where `drawGround` covers it.
+  ctx.fillRect(0, 0, REF_W, REF_H);
 }
 
 function drawGround(ctx: CanvasRenderingContext2D): void {
@@ -105,13 +109,18 @@ function drawStars(ctx: CanvasRenderingContext2D, stars: readonly Star[], t: num
 }
 
 function drawZombie(ctx: CanvasRenderingContext2D, t: number): void {
-  // The figure occupies (378, 38) - (632, 422) in the reference frame.
+  // The painted figure's silhouette bbox is (378, 38) - (632, 422), i.e. 254 x 384.
+  // The shared ICS grid is 20 x 24 cells, so keeping the cells square (254 / 20)
+  // reproduces the measured width exactly and lands the feet at y = 343, just below
+  // the ground curve; stretching to the full 384 px height would turn every pixel
+  // block into a 12.7 x 16 rectangle.
   const cell = 254 / 20;
   const originX = 378;
   const originY = 38;
 
   ctx.save();
-  // Slight lean plus a slow sway, for the shambling read.
+  // Slight lean plus a slow sway, for the shambling read. The shear pivots on the
+  // bottom row of the grid so the feet stay planted.
   ctx.translate(originX + (cell * 20) / 2, originY + cell * 24);
   ctx.transform(1, 0, -0.05 + Math.sin(t * 0.8) * 0.012, 1, 0, 0);
   ctx.translate(-(originX + (cell * 20) / 2), -(originY + cell * 24));

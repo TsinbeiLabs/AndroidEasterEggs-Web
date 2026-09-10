@@ -91,6 +91,7 @@ export async function mountEgg(
   if (ctx === null) throw new Error('canvas 2d context unavailable');
 
   const pointer: PointerState = {
+    id: -1,
     x: 0,
     y: 0,
     down: false,
@@ -98,6 +99,8 @@ export async function mountEgg(
     justReleased: false,
     inside: false,
   };
+  const pointersById = new Map<number, PointerState>();
+  let pointerList: PointerState[] = [];
   const keys = new Set<string>();
   const random = createRng(randomSeed());
 
@@ -134,6 +137,9 @@ export async function mountEgg(
     },
     store: createStore(meta.id),
     pointer,
+    get pointers() {
+      return pointerList;
+    },
     keys,
     actions,
     toast: showToast,
@@ -173,29 +179,85 @@ export async function mountEgg(
   observer.observe(stage);
   resize();
 
-  const toLocal = (event: PointerEvent) => {
+  const toLocal = (event: PointerEvent, target: PointerState) => {
     const rect = canvas.getBoundingClientRect();
-    pointer.x = event.clientX - rect.left;
-    pointer.y = event.clientY - rect.top;
-    pointer.inside =
-      pointer.x >= 0 && pointer.y >= 0 && pointer.x <= rect.width && pointer.y <= rect.height;
+    target.x = event.clientX - rect.left;
+    target.y = event.clientY - rect.top;
+    target.inside =
+      target.x >= 0 && target.y >= 0 && target.x <= rect.width && target.y <= rect.height;
+  };
+
+  const track = (id: number): PointerState => {
+    let entry = pointersById.get(id);
+    if (entry === undefined) {
+      entry = {
+        id,
+        x: 0,
+        y: 0,
+        down: false,
+        justPressed: false,
+        justReleased: false,
+        inside: false,
+      };
+      pointersById.set(id, entry);
+      pointerList = [...pointersById.values()];
+    }
+    return entry;
+  };
+
+  /** The primary mirrors the most recently active pointer. */
+  const promote = (entry: PointerState) => {
+    pointer.id = entry.id;
+    pointer.x = entry.x;
+    pointer.y = entry.y;
+    pointer.inside = entry.inside;
   };
 
   bag.add<PointerEvent>(canvas, 'pointerdown', (event) => {
     canvas.setPointerCapture?.(event.pointerId);
-    toLocal(event);
+    const entry = track(event.pointerId);
+    toLocal(event, entry);
+    entry.down = true;
+    entry.justPressed = true;
+    promote(entry);
     pointer.down = true;
     pointer.justPressed = true;
     for (const cb of downCallbacks) cb(pointer.x, pointer.y);
   });
 
   bag.add<PointerEvent>(canvas, 'pointermove', (event) => {
-    toLocal(event);
+    const entry = pointersById.get(event.pointerId);
+    if (entry === undefined) {
+      toLocal(event, pointer);
+      return;
+    }
+    toLocal(event, entry);
+    if (entry.id === pointer.id || !pointer.down) promote(entry);
   });
 
   const release = (event: PointerEvent) => {
-    toLocal(event);
-    if (!pointer.down) return;
+    const entry = pointersById.get(event.pointerId);
+    if (entry === undefined) {
+      toLocal(event, pointer);
+      if (!pointer.down) return;
+      pointer.down = false;
+      pointer.justReleased = true;
+      for (const cb of upCallbacks) cb(pointer.x, pointer.y);
+      return;
+    }
+
+    toLocal(event, entry);
+    entry.down = false;
+    entry.justReleased = true;
+    // A secondary finger lifting leaves the primary alone.
+    if (entry.id !== pointer.id) return;
+
+    promote(entry);
+    const stillDown = pointerList.find((item) => item.down);
+    if (stillDown !== undefined) {
+      promote(stillDown);
+      return;
+    }
     pointer.down = false;
     pointer.justReleased = true;
     for (const cb of upCallbacks) cb(pointer.x, pointer.y);
@@ -205,6 +267,8 @@ export async function mountEgg(
   bag.add<PointerEvent>(canvas, 'pointercancel', release);
   bag.add<PointerEvent>(canvas, 'pointerleave', (event) => {
     pointer.inside = false;
+    const entry = pointersById.get(event.pointerId);
+    if (entry !== undefined) entry.inside = false;
     release(event);
   });
 
@@ -235,6 +299,7 @@ export async function mountEgg(
   bag.add(window, 'blur', () => {
     keys.clear();
     pointer.down = false;
+    for (const entry of pointerList) entry.down = false;
   });
 
   const egg = await module.default(context);
@@ -259,6 +324,10 @@ export async function mountEgg(
 
     pointer.justPressed = false;
     pointer.justReleased = false;
+    for (const entry of pointerList) {
+      entry.justPressed = false;
+      entry.justReleased = false;
+    }
   };
 
   const onVisibility = () => {

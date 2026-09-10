@@ -1,6 +1,8 @@
 export type FrameCallback = (dt: number, elapsed: number) => void;
 
 export interface PointerState {
+  /** `pointerId` from the Pointer Events API; -1 for a hover-only primary. */
+  id: number;
   x: number;
   y: number;
   down: boolean;
@@ -25,7 +27,17 @@ export interface EggContext {
   readonly width: number;
   readonly height: number;
   readonly store: EggStore;
+  /**
+   * The primary pointer: the most recently active one, or hover position when
+   * nothing is down. Eggs that only need one finger can ignore `pointers`.
+   */
   readonly pointer: PointerState;
+  /**
+   * Every known pointer, so multi-touch eggs can reproduce upstream behaviour
+   * (MLand's per-player touch columns, Pie's pinch-zoom, Landroid's camera).
+   * Entries persist after release with `down === false`; filter on `down`.
+   */
+  readonly pointers: readonly PointerState[];
   readonly keys: ReadonlySet<string>;
   readonly actions: ActionRegistry;
   toast(message: string, seconds?: number): void;

@@ -1,5 +1,5 @@
 import type { EggContext } from '../../core/types';
-import { catHue, catLook, defaultCatName, drawCatIcon } from '../nougat/cat';
+import { catFirstMessage, catHue, catLook, defaultCatName, drawCatIcon } from '../nougat/cat';
 import { randomCatSeed, seedFromString, seedToString } from '../nougat/javaRandom';
 
 /**
@@ -7,9 +7,16 @@ import { randomCatSeed, seedFromString, seedToString } from '../nougat/javaRando
  * 12 Snow Cone and 13 Tiramisu (upstream ships a byte-identical `Cat` and an
  * almost identical `NekoService` in each of those modules).
  *
- * Food types keep their upstream intervals and new-cat probabilities, and the
- * scheduled visit gets the same +/-25 % jitter. Only `seed -> name` is stored;
- * the 27 vector parts and every colour are re-derived from the seed.
+ * Nougat mode reproduces `NekoDialog`/`NekoService`: four foods keep their
+ * upstream intervals and new-cat probabilities and the scheduled visit gets
+ * the same +/-25 % jitter; the job is only (re)scheduled when the dish was
+ * empty (`NekoDialog.onFoodSelected`). Android 11+ mode reproduces
+ * `NekoControlsService`: a food bowl that refills to a 5 minute visit, a
+ * water bubbler (0..200 mL) whose level IS the new-cat probability
+ * (`waterLevel100 = water / 2`, percent), and a toy that summons a random
+ * existing cat after 1-4 s. Only `seed -> name` is stored; the 27 vector
+ * parts, every colour and (from R on) the cat's first message are re-derived
+ * from the seed.
  */
 
 const PURR = [0, 40, 20, 40, 20, 40, 20, 40, 20, 40, 20, 40];
@@ -28,7 +35,13 @@ export const NEKO_FOODS: readonly NekoFood[] = [
   { name: 'Treat', minutes: 120, newCatPercent: 90 },
 ];
 
+/** `NekoControlsService.FOOD_SPAWN_CAT_DELAY_MINS`. */
 const CONTROLS_MINUTES = 5;
+/** `NekoControlsService.makeWaterBowlControl`: RangeTemplate(0, 200, step 10, "%.0f mL"). */
+const WATER_MAX = 200;
+const WATER_STEP = 10;
+/** `NekoControlsService.P_TOY_ICONS`: mouse, fish, ball, laser (uniform weights). */
+const TOY_ICONS = ['🐁', '🐟', '🏐', '🔦'] as const;
 
 interface Job {
   food: number;
@@ -41,13 +54,13 @@ export interface NekoOptions {
   heading: string;
   /** Extra line under the heading, e.g. which Android version this is. */
   subtitle: string;
-  /** Android 11+ shows the device-control style "refill" bowl instead of the QS tile foods. */
+  /** Android 11+ shows the device-control style bowl/water/toy instead of the QS tile foods. */
   controls?: boolean;
   /** Message style notification text, as used from Android 11 on. */
   messages?: readonly string[];
 }
 
-const CAT_MESSAGES = ['😸', '😹', '😺', '😻', '😼', '😽', '😾', '😿', '🙀', '💩', '🐁'];
+/** `r_rare_cat_messages` — drawn at 10 % instead of the egg's normal pool. */
 const RARE_CAT_MESSAGES = ['🍩', '🍭', '🍫', '🍨', '🔔', '🐝', '🍪', '🥧'];
 
 const PANEL_CSS = `
@@ -55,11 +68,15 @@ const PANEL_CSS = `
   background: #12161b; color: #e6edf3; font: 14px/1.5 system-ui, sans-serif; }
 .neko-panel h2 { margin: 0 0 4px; font-size: 18px; }
 .neko-note { margin: 0 0 14px; color: #9aa7b2; font-size: 12px; }
-.neko-dish { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.neko-dish { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .neko-food { border: 1px solid #2b343d; background: #1a2027; color: #e6edf3;
   border-radius: 10px; padding: 8px 12px; cursor: pointer; font-size: 13px; text-align: left; }
 .neko-food[aria-pressed="true"] { border-color: #3ddc84; color: #3ddc84; }
 .neko-food small { display: block; color: #9aa7b2; font-size: 11px; }
+.neko-water { display: flex; align-items: center; gap: 8px; border: 1px solid #2b343d;
+  background: #1a2027; border-radius: 10px; padding: 6px 12px; font-size: 13px; }
+.neko-water input { accent-color: #4285f4; }
+.neko-water output { color: #9aa7b2; font-size: 11px; min-width: 52px; }
 .neko-status { margin: 10px 0 16px; color: #9aa7b2; font-size: 12px; min-height: 18px; }
 .neko-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 12px; }
 .neko-cell { position: relative; display: flex; flex-direction: column; align-items: center;
@@ -80,21 +97,30 @@ export class NekoPanel {
   private panel: HTMLDivElement | null = null;
   private style: HTMLStyleElement | null = null;
   private timer: number | undefined;
+  private toyTimer: number | undefined;
+  private toyThrown = false;
+  private toyIcon: string;
 
   constructor(context: EggContext, options: NekoOptions) {
     this.context = context;
     this.options = options;
+    // `currentToyIcon()`: a random toy until the first toss re-rolls it.
+    this.toyIcon = context.pick(TOY_ICONS);
   }
 
   private get store() {
     return this.context.store;
   }
 
+  private get controls(): boolean {
+    return this.options.controls === true;
+  }
+
   private foods(): readonly NekoFood[] {
-    if (this.options.controls !== true) return NEKO_FOODS;
+    if (!this.controls) return NEKO_FOODS;
     return [
       NEKO_FOODS[0],
-      { name: 'Food bowl · Refill', minutes: CONTROLS_MINUTES, newCatPercent: 65 },
+      { name: 'Food bowl', minutes: CONTROLS_MINUTES, newCatPercent: 0 },
     ];
   }
 
@@ -120,6 +146,8 @@ export class NekoPanel {
   destroy(): void {
     if (this.timer !== undefined) window.clearInterval(this.timer);
     this.timer = undefined;
+    if (this.toyTimer !== undefined) window.clearTimeout(this.toyTimer);
+    this.toyTimer = undefined;
     this.panel?.remove();
     this.style?.remove();
     this.panel = null;
@@ -142,6 +170,15 @@ export class NekoPanel {
     this.store.set('food', food);
   }
 
+  /** `PrefState.getWaterState()`: 0..200 "mL". */
+  private loadWater(): number {
+    return this.store.get<number>('water', 0);
+  }
+
+  private saveWater(water: number): void {
+    this.store.set('water', water);
+  }
+
   private loadJob(): Job | null {
     return this.store.get<Job | null>('job', null);
   }
@@ -160,8 +197,11 @@ export class NekoPanel {
       this.saveFood(0);
       this.saveJob(null);
     } else {
+      const wasEmpty = this.loadFood() === 0;
       this.saveFood(food);
-      this.schedule(food, Date.now());
+      // `NekoDialog.onFoodSelected` only registers the job when the dish was
+      // empty; the R+ bowl control always re-registers on refill.
+      if (wasEmpty || this.controls) this.schedule(food, Date.now());
     }
     this.render();
   }
@@ -169,6 +209,7 @@ export class NekoPanel {
   private schedule(food: number, now: number): void {
     const entry = this.foods()[food];
     if (entry === undefined || entry.minutes <= 0) return;
+    // `NekoService.registerJob`: interval +/- INTERVAL_JITTER_FRAC (25 %).
     const interval = entry.minutes * 60000;
     const jitter = 0.25 * interval;
     this.saveJob({ food, at: now + interval + (this.context.random() * 2 - 1) * jitter });
@@ -179,7 +220,8 @@ export class NekoPanel {
     let guard = 0;
     let job = this.loadJob();
     while (job !== null && Date.now() >= job.at && guard < 24) {
-      this.visit(job.food);
+      // `NekoService.onStartJob` reads the CURRENT food state when it fires.
+      this.visit(this.loadFood());
       job = this.loadJob();
       guard++;
     }
@@ -192,14 +234,20 @@ export class NekoPanel {
   }
 
   private visit(food: number): void {
-    const entry = this.foods()[food] ?? this.foods()[1];
     const cats = this.loadCats();
     const seeds = Object.keys(cats);
 
     this.saveFood(0);
     this.saveJob(null);
+    if (food === 0) return; // the job fired on an already empty dish: nothing to nom
 
-    const newCatProb = ((entry?.newCatPercent ?? 50) as number) / 100;
+    // R+ `NekoService`: food index 11 is past the prob table, so the new-cat
+    // chance is the water level (water / 2 percent). Nougat uses the table
+    // entry, or 50 % for unknown foods.
+    const newCatProb = this.controls
+      ? this.loadWater() / WATER_MAX
+      : (this.foods()[food]?.newCatPercent ?? 50) / 100;
+
     let seed: bigint;
     let name: string;
     let returning = false;
@@ -218,21 +266,46 @@ export class NekoPanel {
     this.saveCats(cats);
 
     navigator.vibrate?.(PURR);
-    this.context.toast(
-      returning ? `${this.message()} ${name} 回来了` : `${this.message()} A cat is here. — ${name}`,
-      3,
-    );
+    this.context.toast(this.visitMessage(seed, name, returning), 3);
     this.render();
   }
 
-  private message(): string {
-    const messages = this.options.messages ?? CAT_MESSAGES;
-    if (messages.length === 0) return '🐱';
-    const rare = this.options.messages !== undefined && this.context.random() < 0.1;
-    const pool = rare ? RARE_CAT_MESSAGES : messages;
-    const picked = pool[Math.floor(this.context.random() * pool.length)];
-    // Upstream repeats the message three times half of the time.
-    return this.context.random() < 0.5 ? `${picked}${picked}${picked}` : picked;
+  /**
+   * From Android 11 on the notification is a message from the cat, derived
+   * from its seed exactly like its colours (`Cat`'s `mFirstMessage`). Nougat
+   * notifications carry no message, only "A cat is here." and the name.
+   */
+  private visitMessage(seed: bigint, name: string, returning: boolean): string {
+    const messages = this.options.messages;
+    const first =
+      messages === undefined || messages.length === 0
+        ? ''
+        : `${catFirstMessage(seed, messages, RARE_CAT_MESSAGES)} `;
+    return returning ? `${first}${name} 回来了` : `${first}A cat is here. — ${name}`;
+  }
+
+  /** `NekoControlsService` CONTROL_ID_TOY: tossed, then a cat reacts 1-4 s later. */
+  private throwToy(): void {
+    if (this.toyTimer !== undefined) return;
+    this.toyThrown = true;
+    this.render();
+    const delay = (1 + Math.floor(this.context.random() * 4)) * 1000;
+    this.toyTimer = window.setTimeout(() => {
+      this.toyTimer = undefined;
+      this.toyThrown = false;
+      this.toyIcon = this.context.pick(TOY_ICONS);
+
+      const cats = this.loadCats();
+      const seeds = Object.keys(cats);
+      if (seeds.length > 0) {
+        const picked = seeds[Math.floor(this.context.random() * seeds.length)];
+        const seed = seedFromString(picked) ?? 0n;
+        const name = cats[picked] ?? defaultCatName(seed);
+        navigator.vibrate?.(PURR);
+        this.context.toast(this.visitMessage(seed, name, true), 3);
+      }
+      this.render();
+    }, delay);
   }
 
   rename(seedKey: string, name: string): void {
@@ -275,33 +348,87 @@ export class NekoPanel {
 
     const dish = document.createElement('div');
     dish.className = 'neko-dish';
-    foods.forEach((entry, i) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'neko-food';
-      button.setAttribute('aria-pressed', String(food === i));
-      const label = document.createElement('span');
-      label.textContent = entry.name;
-      button.appendChild(label);
-      if (entry.minutes > 0) {
-        const small = document.createElement('small');
-        small.textContent =
-          this.options.controls === true
-            ? `Refill · ${entry.minutes} 分钟后来猫`
-            : `${entry.minutes} 分钟 · 新猫 ${entry.newCatPercent}%`;
-        button.appendChild(small);
-      }
-      button.addEventListener('click', () => this.setFood(i));
-      dish.appendChild(button);
-    });
+    if (this.controls) {
+      const bowl = document.createElement('button');
+      bowl.type = 'button';
+      bowl.className = 'neko-food';
+      bowl.setAttribute('aria-pressed', String(food !== 0));
+      const bowlLabel = document.createElement('span');
+      bowlLabel.textContent = food !== 0 ? '🍚 Food bowl · Full' : '🥣 Food bowl · Empty';
+      bowl.appendChild(bowlLabel);
+      const bowlSmall = document.createElement('small');
+      bowlSmall.textContent = food !== 0 ? 'Tap to refill' : `Refill · ${CONTROLS_MINUTES} 分钟后来猫`;
+      bowl.appendChild(bowlSmall);
+      bowl.addEventListener('click', () => this.setFood(1));
+      dish.appendChild(bowl);
+
+      const water = this.loadWater();
+      const waterBox = document.createElement('label');
+      waterBox.className = 'neko-water';
+      const waterTitle = document.createElement('span');
+      waterTitle.textContent = '💧 Water bubbler';
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = String(WATER_MAX);
+      slider.step = String(WATER_STEP);
+      slider.value = String(water);
+      slider.setAttribute('aria-label', 'Water level');
+      const out = document.createElement('output');
+      out.textContent = `${water} mL`;
+      slider.addEventListener('input', () => {
+        const value = Number(slider.value);
+        this.saveWater(value);
+        out.textContent = `${value} mL`;
+      });
+      waterBox.append(waterTitle, slider, out);
+      dish.appendChild(waterBox);
+
+      const toy = document.createElement('button');
+      toy.type = 'button';
+      toy.className = 'neko-food';
+      const toyLabel = document.createElement('span');
+      toyLabel.textContent = `${this.toyIcon} Toy`;
+      toy.appendChild(toyLabel);
+      const toySmall = document.createElement('small');
+      toySmall.textContent = this.toyThrown ? 'Cat attracted!' : 'Tap to use';
+      toy.appendChild(toySmall);
+      toy.addEventListener('click', () => this.throwToy());
+      dish.appendChild(toy);
+    } else {
+      foods.forEach((entry, i) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'neko-food';
+        button.setAttribute('aria-pressed', String(food === i));
+        const label = document.createElement('span');
+        label.textContent = entry.name;
+        button.appendChild(label);
+        if (entry.minutes > 0) {
+          const small = document.createElement('small');
+          small.textContent = `${entry.minutes} 分钟 · 新猫 ${entry.newCatPercent}%`;
+          button.appendChild(small);
+        }
+        button.addEventListener('click', () => this.setFood(i));
+        dish.appendChild(button);
+      });
+    }
 
     const status = document.createElement('p');
     status.className = 'neko-status';
     if (job !== null) {
       const minutes = Math.max(0, Math.round((job.at - Date.now()) / 60000));
-      status.textContent = `食盆：${foods[job.food]?.name ?? '?'} · 预计 ${minutes} 分钟后有猫来访（±25% 抖动）`;
+      const chance = this.controls
+        ? `新猫概率 = 水量 ${this.loadWater()}/${WATER_MAX}`
+        : `新猫 ${foods[this.loadFood()]?.newCatPercent ?? 50}%`;
+      status.textContent = `食盆：${foods[this.loadFood()]?.name ?? '?'} · 预计 ${minutes} 分钟后有猫来访（±25% 抖动，${chance}）`;
     } else {
-      status.textContent = food === 0 ? '食盆是空的，放点食物吧' : '已放好食物，等待猫咪…';
+      status.textContent =
+        food === 0
+          ? this.controls
+            ? '食盆是空的，点 Food bowl 补充；加水能提高新猫概率'
+            : '食盆是空的，放点食物吧'
+          : '已放好食物，等待猫咪…';
     }
 
     const grid = document.createElement('div');

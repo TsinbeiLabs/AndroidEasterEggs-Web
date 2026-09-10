@@ -4,7 +4,6 @@ import {
   NYANDROID_PALETTE,
   PLATLOGO_PALETTE,
   drawGrid,
-  remap,
   rotateCw,
 } from '../../core/pixelart';
 import type { Egg, EggContext } from '../../core/types';
@@ -17,9 +16,11 @@ import type { Egg, EggContext } from '../../core/types';
  * A short tap instead toasts "Android 4.0: Ice Cream Sandwich".
  *
  * Nyandroid: #003366 sky, 20 static twinkling stars and 20 flying droids in
- * 20 depth layers (z = (i/20)^2, scale 0.1..1.905, speed 100..905 px/s). The
- * sprite is the PlatLogo pixel grid rotated 90 degrees clockwise, with a blink
- * on the last 160 ms of every 960 ms animation loop. Any input exits.
+ * 20 depth layers (z = (i/20)^2, so z peaks at 0.9025 for i = 19: scale
+ * 0.1..1.815, speed 100..912.25 px/s). The sprite is the PlatLogo pixel grid
+ * rotated 90 degrees clockwise; frames 10-11 of the 12 frame / 80 ms loop blank the
+ * two eye cells for a blink, and each cat and star carries its own 0-1000 ms start
+ * delay so the frames never line up. Any input exits.
  */
 
 const HOLD_STEPS_MS = [1000, 1500, 2000, 2500];
@@ -37,6 +38,25 @@ const CAT_W = 80;
 const CAT_H = 66.7;
 const CAT_FRAME_MS = 960;
 const CAT_BLINK_MS = 160;
+
+/**
+ * Frames 10 and 11 of `i_nyandroid_anim` are the blink: their pure-white pixel count
+ * drops from 2000 to 1800, i.e. exactly the two 10 x 10 eye-highlight cells go out.
+ * In the rotated grid those are the only two `W` cells inside the head; the other
+ * eighteen are the `SWWWWWWWWWS` ice-cream stripe rows, which must stay lit.
+ */
+const EYE_CELLS: ReadonlyArray<readonly [number, number]> = [
+  [19, 7],
+  [19, 11],
+];
+
+function blinkGrid(grid: readonly string[]): string[] {
+  const out = grid.slice();
+  for (const [col, row] of EYE_CELLS) {
+    out[row] = out[row].slice(0, col) + 'G' + out[row].slice(col + 1);
+  }
+  return out;
+}
 
 const STAR_FRAME_MS = 200;
 const STAR_FRAMES = 6;
@@ -93,6 +113,8 @@ interface Cat {
   v: number;
   x: number;
   y: number;
+  /** AnimationDrawable start delay, `Nyandroid.java:162-166`. */
+  phase: number;
 }
 
 interface Star {
@@ -111,7 +133,7 @@ function vibrate(pattern: number): void {
 export default function createIceCreamSandwich(context: EggContext): Egg {
   const rotated = rotateCw(ICS_PLATLOGO);
   const catSprite = bakeGrid(rotated, NYANDROID_PALETTE, 16);
-  const catBlink = bakeGrid(remap(rotated, 'W', 'G'), NYANDROID_PALETTE, 16);
+  const catBlink = bakeGrid(blinkGrid(rotated), NYANDROID_PALETTE, 16);
 
   let scene: Scene = 'platlogo';
   let holdStart = -1;
@@ -135,6 +157,7 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
         v: CAT_VMIN + (CAT_VMAX - CAT_VMIN) * z,
         x: random() * width,
         y: random() * Math.max(1, height - CAT_H * scale),
+        phase: random() * 1000,
       });
     }
 
@@ -174,7 +197,9 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
 
   const offUp = context.onPointerUp(() => {
     if (scene !== 'platlogo' || holdStart < 0) return;
-    if (pulses === 0) context.toast(LONG_PRESS_TOAST, 2);
+    // `PlatLogoActivity.java:98-104` fires the toast on every ACTION_UP while the
+    // view is pressed, so lifting after one or two pulses still toasts.
+    context.toast(LONG_PRESS_TOAST, 2);
     holdStart = -1;
   });
 
@@ -182,13 +207,45 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
     if (scene === 'nyandroid') exitNyandroid();
   });
 
-  const offFrame = context.onFrame((dt, t) => {
-    if (scene === 'platlogo') {
-      drawPlatLogo(t);
-    } else {
-      drawNyandroid(dt, t);
-    }
+  /**
+   * `Nyandroid.java:203-208`: `onSizeChanged` posts `reset()`, which throws away every
+   * star and cat and re-scatters them for the new board size.
+   */
+  const offResize = context.onResize(() => {
+    if (scene === 'nyandroid') scatter();
   });
+
+  const offFrame = context.onFrame((dt, t) => {
+    // The hold schedule runs before the scene dispatch so that the frame which fires
+    // the fourth pulse goes straight on to draw Nyandroid rather than leaving the
+    // host's clearRect as a one-frame blank at the exact moment of the transition.
+    if (scene === 'platlogo') updateHold();
+    if (scene === 'platlogo') drawPlatLogo(t);
+    else drawNyandroid(dt, t);
+  });
+
+  /**
+   * `PlatLogoActivity.java:41-77`: `mSuperLongPress` first runs at
+   * `2 * getLongPressTimeout()` (1000 ms) and reposts every `getLongPressTimeout()`
+   * (500 ms) while `mCount <= 3`, each time buzzing for `50 * mCount` ms and setting
+   * `scale = 1 + 0.25 * mCount^2`. On the fourth pulse `mCount` reaches 4, so it
+   * launches Nyandroid instead of reposting.
+   */
+  function updateHold(): void {
+    if (holdStart < 0) return;
+    const held = performance.now() - holdStart;
+    let next = pulses;
+    while (next < HOLD_STEPS_MS.length && held >= HOLD_STEPS_MS[next]) {
+      next++;
+      logoScale = 1 + 0.25 * next * next;
+      vibrate(50 * next);
+      if (next >= HOLD_STEPS_MS.length) {
+        enterNyandroid();
+        return;
+      }
+    }
+    pulses = next;
+  }
 
   function drawPlatLogo(t: number): void {
     const { ctx, width, height } = context;
@@ -198,21 +255,6 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
     gradient.addColorStop(1, '#05070a');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-
-    if (holdStart >= 0) {
-      const held = performance.now() - holdStart;
-      let next = pulses;
-      while (next < HOLD_STEPS_MS.length && held >= HOLD_STEPS_MS[next]) {
-        next++;
-        logoScale = 1 + 0.25 * next * next;
-        vibrate(50 * next);
-        if (next >= HOLD_STEPS_MS.length) {
-          enterNyandroid();
-          return;
-        }
-      }
-      pulses = next;
-    }
 
     const cols = ICS_PLATLOGO[0].length;
     const rows = ICS_PLATLOGO.length;
@@ -247,12 +289,6 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
       }
     }
 
-    const blinking = nowMs % CAT_FRAME_MS >= CAT_FRAME_MS - CAT_BLINK_MS;
-    const sprite = blinking ? catBlink : catSprite;
-    // Hand-drawn +/-1 cell "boil" of the original 12 frame animation.
-    const wobbleX = Math.round(Math.sin((nowMs / CAT_FRAME_MS) * Math.PI * 2));
-    const wobbleY = Math.round(Math.cos((nowMs / CAT_FRAME_MS) * Math.PI * 4));
-
     ctx.imageSmoothingEnabled = true;
     for (const cat of cats) {
       const w = CAT_W * cat.scale;
@@ -262,6 +298,15 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
         cat.x = -w - 2;
         cat.y = context.random() * Math.max(1, height - h);
       }
+      // `Nyandroid.java:162-166` starts every cat's AnimationDrawable after a random
+      // 0-1000 ms delay, so the 12 frame / 80 ms boil — and the blink that lands on
+      // frames 10-11, i.e. the last 160 ms of each 960 ms loop — is desynchronised
+      // across the flock rather than pulsing in lockstep.
+      const local = nowMs + cat.phase;
+      const sprite = local % CAT_FRAME_MS >= CAT_FRAME_MS - CAT_BLINK_MS ? catBlink : catSprite;
+      // Hand-drawn +/-1 cell "boil" of the original 12 frame animation.
+      const wobbleX = Math.round(Math.sin((local / CAT_FRAME_MS) * Math.PI * 2));
+      const wobbleY = Math.round(Math.cos((local / CAT_FRAME_MS) * Math.PI * 4));
       const cell = w / 24;
       ctx.drawImage(sprite, cat.x + wobbleX * cell, cat.y + wobbleY * cell, w, h);
     }
@@ -273,6 +318,7 @@ export default function createIceCreamSandwich(context: EggContext): Egg {
       offDown();
       offUp();
       offKey();
+      offResize();
       offFrame();
     },
   };

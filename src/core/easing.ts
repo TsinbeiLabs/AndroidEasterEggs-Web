@@ -26,15 +26,19 @@ function overshoot(u: number, s: number): number {
   return u * u * ((s + 1) * u + s);
 }
 
-/** `AnticipateOvershootInterpolator` with the default tension 2. */
+/**
+ * `AnticipateOvershootInterpolator()` — the no-arg constructor uses
+ * `mTension = 2.0f * 1.5f` and `mExtra = 0`, so s is 3, not the CSS
+ * easeInOutBack constant 2 * 1.70158.
+ */
 export function anticipateOvershoot(t: number): number {
-  const s = 2 * 1.70158;
+  const s = 3;
   return t < 0.5 ? 0.5 * anticipate(2 * t, s) : 0.5 * (overshoot(2 * t - 2, s) + 2);
 }
 
-/** `OvershootInterpolator` with the default tension 2. */
+/** `OvershootInterpolator()` — the no-arg constructor uses `mTension = 2.0f`. */
 export function overshootEase(t: number): number {
-  return overshoot(t - 1, 2 * 1.70158) + 1;
+  return overshoot(t - 1, 2) + 1;
 }
 
 /**

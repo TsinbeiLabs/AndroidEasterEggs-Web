@@ -8,8 +8,10 @@ import { PlatLogoClock } from '../shared/clock';
  *
  * The PlatLogo is the settable analog clock over a 2000-bubble packed field; set
  * it to 12:00 and let go to fade the clock out, pop the accent3 "12" logo in with
- * an overshoot and grow the bubbles. Unlocking enables both secondary screens:
- * Paint Chips (the 13 x 5 dynamic colour grid) and the Neko collector.
+ * an overshoot and grow the bubbles. Like upstream the screen stays open after
+ * the unlock ("it's fun to frob the dial") and only `s_egg_mode` is written; the
+ * secondary screens — Paint Chips (the 13 x 5 dynamic colour grid) and the Neko
+ * collector — are reached through the action buttons.
  */
 
 type Scene = 'clock' | 'chips' | 'neko';
@@ -45,15 +47,12 @@ export default function createS(context: EggContext): Egg {
   clock = new PlatLogoClock(context, {
     unlockHour: 0,
     logo: 'twelve',
-    discColor: '#787296',
     emojiBubbles: false,
     onUnlock: () => {
+      // SpUtils.putLong(this, "s_egg_mode", System.currentTimeMillis())
       if (context.store.get<number>('s_egg_mode', 0) === 0) {
         context.store.set('s_egg_mode', Date.now());
       }
-      clock?.destroy();
-      clock = null;
-      showChips();
     },
   });
 

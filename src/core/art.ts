@@ -90,7 +90,8 @@ export function drawDroid(ctx: CanvasRenderingContext2D, options: DroidOptions):
   const eyeDX = unit * 0.45;
 
   ctx.save();
-  ctx.globalAlpha = alpha;
+  // Multiply, so a caller's reveal fade is not overwritten by the default alpha.
+  ctx.globalAlpha *= alpha;
   ctx.translate(x, y);
   ctx.rotate(rotation);
   ctx.fillStyle = bodyColor;
